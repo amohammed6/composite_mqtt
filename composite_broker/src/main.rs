@@ -1,3 +1,6 @@
+mod msg_parser;
+
 fn main() {
-    println!("Hello, world!");
+    msg_parser::parse_pub();
+    msg_parser::parse_sub();
 }
