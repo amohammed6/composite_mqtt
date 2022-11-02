@@ -1,10 +1,38 @@
-pub mod msg_parser {
+
+use mqtt_v5::{
+    types, encoder, decoder, 
+};
+use bytes::{BytesMut, Bytes}; 
+
+pub fn cm_encode(
+    packet: mqtt_v5::types::Packet, 
+    buffer: &mut BytesMut) 
+    -> Result<&mut BytesMut, String> {
+    encoder::encode_mqtt(&packet, buffer, types::ProtocolVersion::V500);
+    if buffer.is_empty() {
+        Err("Packet wasn't encoded".to_string())
+    } else {
+        Ok(buffer)
+    }
+}
+
+// Decode function
+//  input: bytes of encoded packet
+//  output: packet
+pub fn cm_decode(buffer: &mut BytesMut) -> mqtt_v5::types::Packet {
+    decoder::decode_mqtt(buffer, types::ProtocolVersion::V500).unwrap().unwrap()
+}
+
+
+#[cfg(test)]
+mod tests {
     use mqtt_v5::{
-        types, encoder, decoder, 
+        types 
     };
-    use bytes::{BytesMut, Bytes}; 
-    
-    pub fn parse_test () {
+    use bytes::{BytesMut}; 
+
+    #[test]
+    fn connect_encode_decode() {
         // Create a Connect packet
         let c_id1: String = String::from("1004");
         let conn_p = types::ConnectPacket{
@@ -22,27 +50,15 @@ pub mod msg_parser {
 
         // create buffer for encoding
         let mut buf = BytesMut::new();
-
-        // testing block
-        println!("Connect Packet test");
-        assert_eq!(cm_encode(packet, &mut buf), false);
-        println!("\tConnect packet encoding success");
+        assert_eq!(cm_encode(packet, &mut buf), packet);
         
-
         // decode the connect packet
-        let mut conn_client_id: String = String::new();
         let decode = cm_decode(&mut buf);
-        match decode {
-            types::Packet::Connect(connect_packet) => {
-                conn_client_id = connect_packet.client_id;
-            },
-            _=> {}
-        }
 
-        // testing block
-        assert_eq!(c_id1, conn_client_id);
-        println!("\tConnect packet decoding success");
+        assert_eq!(packet, decode);
+    }
 
+    fn publish_encode_decode() {
         // Create a Publish packet
         let top : String = String::from("gwu");
         let pub_p = types::PublishPacket{
@@ -61,39 +77,11 @@ pub mod msg_parser {
         // create the buffer for encoding
         let mut buf2 = BytesMut::new();
 
-        // testing block
-        println!("Publish Packet test");
-        assert_eq!(cm_encode(packet2, &mut buf2), false);
-        println!("\tPublish packet encoding success");
+        assert_eq!(cm_encode(packet2, &mut buf2), !packet2);
 
         // decode publish packet
-        let mut pub_topic: String = String::new(); 
         let decode2 = cm_decode(&mut buf2);
-        match decode2 {
-            types::Packet::Publish(publish_packet) => {
-                pub_topic = String::from(publish_packet.topic.topic_name());
-            },
-            _=> {}
-        }
 
-        // testing block
-        assert_eq!(pub_topic, top);
-        println!("\tPublish packet decoding success");
-    }
-    
-    pub fn cm_encode(
-        packet: mqtt_v5::types::Packet, 
-        buffer: &mut BytesMut) 
-        -> bool {
-        encoder::encode_mqtt(&packet, buffer, types::ProtocolVersion::V500);
-        buffer.is_empty()
-    }
-    
-    // Decode function
-    //  input: bytes of encoded packet
-    //  output: packer
-    pub fn cm_decode(buffer: &mut BytesMut) -> mqtt_v5::types::Packet {
-        decoder::decode_mqtt(buffer, types::ProtocolVersion::V500).unwrap().unwrap()
+        assert_eq!(packet2, decode2);
     }
 }
-
