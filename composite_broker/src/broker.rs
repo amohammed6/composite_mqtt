@@ -1,6 +1,8 @@
 mod tree;
 // use tree::tree::SubscriptionTree;
 pub mod broker {
+    // use std::ops::Sub;
+
     // broker function
     use mqtt_v5::{
         topic::TopicFilter,
@@ -23,6 +25,13 @@ pub mod broker {
         client_id: String,
         // active: bool,
     }
+    // impl <T> Iterator for Subs<> where T: fmt::Display {
+    //     type Item = T;
+    //     type IntoIter = vec_deque::IntoIter<T>;
+    //     fn into_iter(self) -> Self::IntoIter {
+    //         self.store.into_iter()
+    //     }
+    // }
 
     // clients (may be handled by session?)
     pub struct MBroker {
@@ -86,6 +95,8 @@ pub mod broker {
 
                 // store in subscriptions list
                 println!("SubTree count: \t{}",self.subscriptions.insert(&topic.topic_filter, subscription));
+                // let match_subs = self.subscriptions.matching_subscribers(topic);
+                // println!("Matching Subscribers: \t{:?}" , self.subscriptions.matching_subscribers(topic.parse().unwrap()));
             }
 
             let sub_ack = SubscribeAckPacket {

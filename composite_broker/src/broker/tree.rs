@@ -91,7 +91,7 @@ pub mod tree {
                         current_tree =
                             current_tree.concrete_topic_levels.get_mut(concrete_topic_level).unwrap();
                     },
-                    _ => {}
+                    // _ => {}
                 }
             }
 
@@ -137,7 +137,7 @@ pub mod tree {
                             return None;
                         }
                     },
-                    _ => {}
+                    // _ => {}
                 }
             }
 
@@ -186,7 +186,7 @@ pub mod tree {
                             }
                         }
                     },
-                    _ => {}
+                    // _ => {}
                 }
             }
 
