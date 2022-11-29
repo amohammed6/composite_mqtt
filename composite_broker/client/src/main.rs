@@ -1,9 +1,11 @@
-// mod super::msg_parser;
+// mod composite_broker;
+// use composite_broker::*;
+// extern crate composite_broker;
 use std::str;
 use std::net::TcpStream;
 use std::io::{self,Write, prelude::*,BufReader}; 
-use crate::super::msg_parser::msg_parser::{cm_decode, cm_encode};
-use mqtt_v5::types::{Packet, ConnectPacket, ProtocolVersion};
+// use crate::super::msg_parser::msg_parser::{cm_decode, cm_encode};
+use mqtt_v5::{encoder, types::{Packet, ConnectPacket, ProtocolVersion}};
 use bytes::{BytesMut};
 
 
@@ -31,7 +33,8 @@ fn accept_connect(mut stream: &TcpStream) {
 
     // encode it
     let mut buf = BytesMut::new();      // create buffer for encoding
-    cm_encode(packet, &mut buf);
+    // cm_encode(packet, &mut buf); 
+    encoder::encode_mqtt(&packet, &mut buf, ProtocolVersion::V500);
 
     // write to stream
     stream.write(buf.as_mut()).expect("failed to send connect packet");
@@ -52,7 +55,6 @@ fn main() -> io::Result<()>{
             
         if str::from_utf8(&buffer).unwrap().contains("connect") {
             accept_connect(&stream);
-            
         }
         // println!("read from server:{}",str::from_utf8(&buffer).unwrap());
         println!("");

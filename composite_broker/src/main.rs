@@ -1,41 +1,45 @@
 mod broker;
 mod msg_parser;
 use std::io;
+// use bytes::{BytesMut};
 use std::time;
 use std ::net::{TcpListener,TcpStream};
 use std::io::{Read,Write};
 use std::thread;
+use crate::msg_parser::msg_parser::{cm_decode};
+use mqtt_v5::types::{Packet}; // ConnectPacket. decoder, ProtocolVersion
 
-// Handle access stream
-//create a struct to hold the stream’s state
+// Handle access stream; create a struct to hold the stream’s state
 // Perform I/O operations
 fn handle_sender(mut stream: TcpStream) -> io::Result<()>{
-    // let mut msg;
+
     // Handle multiple access stream
-    // let mut buf= Bytes::new();
     let mut buf = [0;512];
     for _ in 0..1000{
-        // let the receiver get a message from a sender
-        let bytes_read = stream.read(&mut buf)?;
-        // sender stream in a mutable variable
-        if bytes_read == 0{
+        let bytes_read = stream.read(&mut buf)?;  // let the receiver get a message from a sender
+        
+        if bytes_read == 0 {
+            // sender stream in a mutable variable
             return Ok(());
         }
 
         stream.write(&buf[..bytes_read])?;
 
-        // Print acceptance message
-        //read, print the message sent
-        let msg = String::from_utf8_lossy(&buf);
-        if msg.contains("connect") {
+        // Read and determine path for message
+        if String::from_utf8_lossy(&buf).contains("connect") {
+            // if "connect" message received, alert client to send connect packet
             println!("connect recognized from client");
         }
         else {
-            println!("from the sender:{}", msg);
-        }
+            // decoding packet 
+            let decode = cm_decode(&mut buf);
 
-        // println!("Things received");
-        // println!("from the sender:{}", msg);
+            match decode {
+                Ok(Packet::Connect(p)) => println!("\tConnect packet received {}", p.client_id),
+                _ => panic!("Incorrect type returned"),
+            };
+        }
+        
         // And you can sleep this connection with the connected sender
         thread::sleep(time::Duration::from_secs(1));  
     }
@@ -43,9 +47,6 @@ fn handle_sender(mut stream: TcpStream) -> io::Result<()>{
     Ok(())
 }
 
-// fn accept_connect() {
-
-// }
 
 fn main() -> io::Result<()>{
     // Enable port 7878 binding

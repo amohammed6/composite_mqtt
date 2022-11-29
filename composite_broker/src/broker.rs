@@ -21,6 +21,7 @@ pub mod broker {
     // specified type T (for subscriptions)
     // client_id
     #[derive(Debug)]
+    #[allow(dead_code)]
     struct Subs {
         client_id: String,
         // active: bool,
@@ -40,6 +41,7 @@ pub mod broker {
         unsub_list: Vec<TopicFilter>,   // use for unsubscriptions list
     }
     impl MBroker {
+        #[allow(dead_code)]
         pub fn new() -> Self {
             Self {
                 subscriptions: SubscriptionTree::new(),
@@ -47,6 +49,7 @@ pub mod broker {
                 clients: Vec::new()
             }
         }
+        #[allow(dead_code)]
         // receive connect packet
         pub fn accept_new_client(&mut self, connect_packet: ConnectPacket) -> ConnectAckPacket {
             // create connect_ack packet
@@ -83,6 +86,7 @@ pub mod broker {
             conn_ack
         }
 
+        #[allow(dead_code)]
         // receive subscribe packet
         pub fn accept_sub(&mut self, sub_packet: SubscribePacket) -> SubscribeAckPacket {
 

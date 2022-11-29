@@ -8,4 +8,5 @@ edition = "2021"
 [dependencies]
 mqtt-v5 = "0.1.1"
 bytes = "0.5.4"
+composite_broker = {path = "../"}
 
