@@ -4,6 +4,7 @@ use std::io::{self,Write, prelude::*,BufReader};
 use mqtt_v5::{encoder, types::{Packet, ConnectPacket, PublishPacket, SubscribePacket, SubscriptionTopic, QoS, 
     RetainHandling, ProtocolVersion}};
 use bytes::{Bytes, BytesMut};
+use composite_mqtt::msg_parser::cm_decode;
 
 fn send_connect(mut stream: &TcpStream) {
     // make connect packet
@@ -113,21 +114,38 @@ fn main() -> io::Result<()>{
         let mut reader =BufReader::new(&stream);
         let mut buffer: Vec<u8> = Vec::new();               // Check if this input message values are u8
         reader.read_until(b'\n',&mut buffer)?;              // Read input information
-            
-        if input.contains("connect") {
-            send_connect(&stream);
+        if buffer.is_empty() {
+            println!("empty");
+        } else {println!("not empty");}
+
+        if String::from_utf8_lossy(&input.as_bytes()).starts_with("mqtt") {
+            println!("S");
+            if input.contains("connect") {
+                send_connect(&stream);
+            }
+            // subscribe to a topic
+            else if input.contains("sub") {
+                // let v = input.split(' ').collect();
+                packet_num = send_sub(&stream, input, &packet_num);
+            }
+            // publish to a topic
+            else if input.contains("pub") {
+                // let v = input.split(':').collect();
+                packet_num = send_pub(&stream, input, &packet_num);
+            }
         }
-        // subscribe to a topic
-        else if input.contains("sub") {
-            // let v = input.split(' ').collect();
-            packet_num = send_sub(&stream, input, &packet_num);
+        else {
+            println!("D");
+            // decode 
+            let decoded = cm_decode(&mut buffer);
+
+            match decoded {
+                Ok(Packet::ConnectAck(p)) => {println!("Connection successful {}", p.session_present)},
+                _ => panic!("Unknown type returned"),
+            };
         }
-        // publish to a topic
-        else if input.contains("pub") {
-            // let v = input.split(':').collect();
-            packet_num = send_pub(&stream, input, &packet_num);
-        }
-        println!("");
+        
+        println!("E");
     }
     Ok(())
 }

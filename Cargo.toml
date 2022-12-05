@@ -1,5 +1,5 @@
 [package]
-name = "client"
+name = "composite_mqtt"
 version = "0.1.0"
 edition = "2021"
 
@@ -8,4 +8,3 @@ edition = "2021"
 [dependencies]
 mqtt-v5 = "0.1.1"
 bytes = "0.5.4"
-composite_mqtt = {path = "../../"}

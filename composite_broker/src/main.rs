@@ -1,13 +1,13 @@
 mod broker;
 mod msg_parser;
 use std::io;
-// use bytes::{BytesMut};
+use bytes::{BytesMut};
 use std::time;
 use std ::net::{TcpListener,TcpStream};
 use std::io::{Read,Write};
 use std::thread;
 use crate::msg_parser::msg_parser::{cm_decode};
-use mqtt_v5::types::{Packet}; // ConnectPacket. decoder, ProtocolVersion
+use mqtt_v5::{encoder,types::{Packet, ConnectAckPacket, ConnectReason, ProtocolVersion}}; // ConnectPacket. decoder
 
 // Handle access stream; create a struct to hold the stream’s state
 // Perform I/O operations
@@ -26,7 +26,7 @@ fn handle_sender(mut stream: TcpStream) -> io::Result<()>{
         stream.write(&buf[..bytes_read])?;
 
         // Read and determine path for message
-        if String::from_utf8_lossy(&buf).starts_with("mqtt") {// contains("connect") {
+        if String::from_utf8_lossy(&buf).starts_with("mqtt") {
             // if "connect" message received, alert client to send connect packet
             println!("Command recognized from client");
         }
@@ -35,9 +35,46 @@ fn handle_sender(mut stream: TcpStream) -> io::Result<()>{
             let decode = cm_decode(&mut buf);
 
             match decode {
-                Ok(Packet::Connect(p)) => println!("\tConnect packet received {}", p.client_id),
-                Ok(Packet::Publish(p)) => println!("\tPublish packet received {} and {}", p.topic, String::from_utf8_lossy(&p.payload)),
-                Ok(Packet::Subscribe(p)) => println!("\tSubscribe packet received {}", p.packet_id),
+                Ok(Packet::Connect(p)) => {
+                    println!("\tConnect packet received {}", p.client_id);
+                    let packet = Packet::ConnectAck( ConnectAckPacket { 
+                        session_present: true, 
+                        reason_code: ConnectReason::Success, 
+                        session_expiry_interval: None, 
+                        receive_maximum: None, 
+                        maximum_qos: None, 
+                        retain_available: None, 
+                        maximum_packet_size: None, 
+                        assigned_client_identifier: None, 
+                        topic_alias_maximum: None, 
+                        reason_string: None, 
+                        user_properties: Vec::new(), 
+                        wildcard_subscription_available: None, 
+                        subscription_identifiers_available: None, 
+                        shared_subscription_available: None, 
+                        server_keep_alive: None, 
+                        response_information: None, 
+                        server_reference: None, 
+                        authentication_method: None, 
+                        authentication_data: None 
+                        
+                    });
+                    // encode it
+                    let mut buf = BytesMut::new();      // create buffer for encoding
+                    // cm_encode(packet, &mut buf); 
+                    encoder::encode_mqtt(&packet, &mut buf, ProtocolVersion::V500);
+                    if buf.is_empty() {
+                        println!("empty");
+                    } else {println!("not empty");}
+                    // write to stream
+                    stream.write(buf.as_mut()).expect("failed to send connectack packet");
+                },
+                Ok(Packet::Publish(p)) => {
+                    println!("\tPublish packet received {} and {}", p.topic, String::from_utf8_lossy(&p.payload))
+                },
+                Ok(Packet::Subscribe(p)) => {
+                    println!("\tSubscribe packet received {}", p.packet_id)
+                },
                 _ => panic!("Incorrect type returned"),
             };
         }
