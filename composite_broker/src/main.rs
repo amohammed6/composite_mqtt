@@ -26,9 +26,9 @@ fn handle_sender(mut stream: TcpStream) -> io::Result<()>{
         stream.write(&buf[..bytes_read])?;
 
         // Read and determine path for message
-        if String::from_utf8_lossy(&buf).contains("connect") {
+        if String::from_utf8_lossy(&buf).starts_with("mqtt") {// contains("connect") {
             // if "connect" message received, alert client to send connect packet
-            println!("connect recognized from client");
+            println!("Command recognized from client");
         }
         else {
             // decoding packet 
@@ -36,6 +36,8 @@ fn handle_sender(mut stream: TcpStream) -> io::Result<()>{
 
             match decode {
                 Ok(Packet::Connect(p)) => println!("\tConnect packet received {}", p.client_id),
+                Ok(Packet::Publish(p)) => println!("\tPublish packet received {} and {}", p.topic, String::from_utf8_lossy(&p.payload)),
+                Ok(Packet::Subscribe(p)) => println!("\tSubscribe packet received {}", p.packet_id),
                 _ => panic!("Incorrect type returned"),
             };
         }
