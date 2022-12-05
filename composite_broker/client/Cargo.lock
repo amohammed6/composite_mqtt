@@ -37,6 +37,15 @@ name = "client"
 version = "0.1.0"
 dependencies = [
  "bytes",
+ "composite_mqtt",
+ "mqtt-v5",
+]
+
+[[package]]
+name = "composite_mqtt"
+version = "0.1.0"
+dependencies = [
+ "bytes",
  "mqtt-v5",
 ]
 
