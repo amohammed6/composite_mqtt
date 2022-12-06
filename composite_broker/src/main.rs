@@ -28,16 +28,22 @@ fn handle_sender(mut stream: TcpStream) -> io::Result<()>{
         // Read and determine path for message
         if String::from_utf8_lossy(&buf).starts_with("mqtt") {// contains("connect") {
             // if "connect" message received, alert client to send connect packet
-            println!("Command recognized from client");
+            println!("Incoming command from client");
         }
         else {
             // decoding packet 
             let decode = cm_decode(&mut buf);
 
             match decode {
-                Ok(Packet::Connect(p)) => println!("\tConnect packet received {}", p.client_id),
-                Ok(Packet::Publish(p)) => println!("\tPublish packet received {} and {}", p.topic, String::from_utf8_lossy(&p.payload)),
-                Ok(Packet::Subscribe(p)) => println!("\tSubscribe packet received {}", p.packet_id),
+                Ok(Packet::Connect(p)) => 
+                    println!("\tConnect packet received with ID {}\n", p.client_id)
+                ,
+                Ok(Packet::Publish(p)) => 
+                    println!("\tPublish packet received for topic {} with date: {}", p.topic.to_string().trim(), String::from_utf8_lossy(&p.payload))
+                ,
+                Ok(Packet::Subscribe(p)) => 
+                    println!("\tSubscribe packet received with packet ID {} and topic {}", p.packet_id, p.subscription_topics[0].topic_filter.to_string())
+                ,
                 _ => panic!("Incorrect type returned"),
             };
         }

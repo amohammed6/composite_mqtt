@@ -32,6 +32,8 @@ fn send_connect(mut stream: &TcpStream) {
     // cm_encode(packet, &mut buf); 
     encoder::encode_mqtt(&packet, &mut buf, ProtocolVersion::V500);
 
+    println!("\tSending ConnectPacket for a new client with ID: 1004\n");
+
     // write to stream
     stream.write(buf.as_mut()).expect("failed to send connect packet");
 }
@@ -59,6 +61,8 @@ fn send_sub(mut stream: &TcpStream, topic_name: String, packet_num: &u16) -> u16
     // cm_encode(packet, &mut buf); 
     encoder::encode_mqtt(&packet, &mut buf, ProtocolVersion::V500);
 
+    println!("\tSending SubscribePacket for topic: {}", v[1]);
+
     // write to stream
     stream.write(buf.as_mut()).expect("failed to send subscribe packet");
 
@@ -74,9 +78,9 @@ fn send_pub(mut stream: &TcpStream, args: String, packet_num: &u16) ->u16 {
         is_duplicate: false,
         qos: QoS::AtLeastOnce,
         retain: true,
-        topic: topic_name.split_at(8).1.parse().unwrap(),
+        topic: topic_name.clone().split_at(8).1.parse().unwrap(),
         user_properties: Vec::new(),
-        payload: Bytes::from(content), // immutable to preserve security,
+        payload: Bytes::from(content.clone()), // immutable to preserve security,
         packet_id: Some(*packet_num),                 // required
         payload_format_indicator: None,
         message_expiry_interval: None,
@@ -93,6 +97,8 @@ fn send_pub(mut stream: &TcpStream, args: String, packet_num: &u16) ->u16 {
     let mut buf = BytesMut::new();      // create buffer for encoding
     // cm_encode(packet, &mut buf); 
     encoder::encode_mqtt(&packet, &mut buf, ProtocolVersion::V500);
+
+    println!("\tSending PublishPacket for topic '{}' with data: {}", topic_name.clone().split_at(9).1, content.clone());
 
     // write to stream
     stream.write(buf.as_mut()).expect("failed to send subscribe packet");
@@ -127,7 +133,7 @@ fn main() -> io::Result<()>{
             // let v = input.split(':').collect();
             packet_num = send_pub(&stream, input, &packet_num);
         }
-        println!("");
+        // println!("");
     }
     Ok(())
 }
