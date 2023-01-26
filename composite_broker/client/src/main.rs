@@ -110,6 +110,7 @@ fn main() -> io::Result<()>{
     let mut packet_num = 00;
     // Struct used to start requests to the server.
     let mut stream = TcpStream::connect("127.0.0.1:7878")?;             // Check TcpStream Connection to the server
+    println!("TCP Connection to MusQraTT Broker Starting...");
     for _ in 0..1000 {
         let mut input = String::new();                                  // Allow sender to enter message input 
         io::stdin().read_line(&mut input).expect("Failed to read");     // First access the input message and read it

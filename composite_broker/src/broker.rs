@@ -1,130 +1,171 @@
-mod tree;
-// use tree::tree::SubscriptionTree;
 pub mod broker {
-    // use std::ops::Sub;
+    use std::collections::HashMap;
+    use mqtt_v5::{topic::TopicFilter, types::{ConnectAckPacket, ConnectPacket, ConnectReason, 
+        properties::AssignedClientIdentifier, SubscribeAckPacket, SubscribePacket, SubscribeAckReason,
+        properties::ReasonString, PublishPacket, PublishAckPacket, PublishAckReason, UnsubscribePacket
+    }};
 
-    // broker function
-    use mqtt_v5::{
-        topic::TopicFilter,
-        types::{
-        properties::AssignedClientIdentifier, //PublishPacket, PublishAckPacket
-        ConnectAckPacket,
-        ConnectPacket,
-        ConnectReason, SubscribePacket, SubscribeAckPacket, SubscribeAckReason,
-        }
-    };
-
-    use super::tree::tree::SubscriptionTree;
-
-    // global ds
-    // 1-level subscriptions
-    // specified type T (for subscriptions)
-    // client_id
-    #[derive(Debug)]
+    
+    #[derive(Debug, Clone)]
     #[allow(dead_code)]
-    struct Subs {
+    pub struct Client {
         client_id: String,
-        // active: bool,
+        address: String,
     }
-    // impl <T> Iterator for Subs<> where T: fmt::Display {
-    //     type Item = T;
-    //     type IntoIter = vec_deque::IntoIter<T>;
-    //     fn into_iter(self) -> Self::IntoIter {
-    //         self.store.into_iter()
-    //     }
+
+    impl Client {
+        fn new (client: String, address: String) -> Client {
+            Client {client_id: client, address: address}
+        }
+    }
+
+    // #[derive(Debug)]
+    // pub enum BrokerMessage {
+    //     // NewClient(Box<ConnectPacket>, Sender<ClientMessage>),
+    //     Publish(String, Box<PublishPacket>),
+    //     PublishAck(String, PublishAckPacket), // TODO - This can be handled by the client task
+    //     Subscribe(String, SubscribePacket), // TODO - replace string client_id with int
+    //     Unsubscribe(String, UnsubscribePacket), // TODO - replace string client_id with int
+    //     // Disconnect(String, WillDisconnectLogic),
     // }
 
-    // clients (may be handled by session?)
+    #[derive(Debug, Clone)]
+    #[allow(dead_code)]
     pub struct MBroker {
-        clients: Vec<Subs>,
-        subscriptions: SubscriptionTree<Subs>, // use as subscriptions list
-        unsub_list: Vec<TopicFilter>,   // use for unsubscriptions list
+        num_packets: u16,
+        client_list: Vec<Client>,
+        concrete_subscriptions_list: HashMap<String, Vec<Client>>,
+        store_outgoing_publish: Vec<PublishPacket>,
     }
+
+    #[allow(dead_code)]
     impl MBroker {
-        #[allow(dead_code)]
+
+        // make a new Broker
         pub fn new() -> Self {
-            Self {
-                subscriptions: SubscriptionTree::new(),
-                unsub_list: Vec::new(),
-                clients: Vec::new()
+            Self { 
+                num_packets: 2000,
+                client_list: Vec::new(), 
+                concrete_subscriptions_list: HashMap::new(),
+                store_outgoing_publish: Vec::new(),
             }
-        }
-        #[allow(dead_code)]
-        // receive connect packet
-        pub fn accept_new_client(&mut self, connect_packet: ConnectPacket) -> ConnectAckPacket {
+        } // end new
+
+        // accept a connect packet
+        pub fn accept_connect(&mut self, addr: &str, connect_packet: ConnectPacket) -> ConnectAckPacket {
+            // make a new client 
+            let c: Client = Client::new(connect_packet.client_id.clone(), addr.to_string());
+
+            // add to client list
+            self.client_list.push(c);
+
             // create connect_ack packet
             let conn_ack = ConnectAckPacket {
                 session_present: true,
-                reason_code: ConnectReason::Success,
-                session_expiry_interval: None,
-                receive_maximum: None,
-                maximum_qos: None,
-                retain_available: None,
-                maximum_packet_size: None,
                 assigned_client_identifier: Some(AssignedClientIdentifier(
                     connect_packet.client_id.clone(),
                 )),
-                topic_alias_maximum: None,
-                reason_string: None,
-                response_information: None,
+                reason_code: ConnectReason::Success,
                 user_properties: vec![],
-                wildcard_subscription_available: None,
-                subscription_identifiers_available: None,
-                shared_subscription_available: None,
-                server_keep_alive: None,
-                server_reference: None,
-                authentication_method: None,
-                authentication_data: None,
+                session_expiry_interval:None, receive_maximum:None, maximum_qos:None, retain_available:None, 
+                maximum_packet_size:None, topic_alias_maximum:None, reason_string:None, response_information:None,
+                wildcard_subscription_available:None, subscription_identifiers_available:None,
+                shared_subscription_available:None, server_keep_alive:None, server_reference:None,
+                authentication_data:None, authentication_method:None,
             };
-
-            // add client id to client ds
-            self.clients.push(Subs {
-                client_id: connect_packet.client_id,
-            }); // , active: true
-
-            // send the client the ack
+            self.num_packets +=1;
             conn_ack
-        }
+        } // end connect
 
-        #[allow(dead_code)]
-        // receive subscribe packet
-        pub fn accept_sub(&mut self, sub_packet: SubscribePacket) -> SubscribeAckPacket {
-
-            // add to subscription tree
-            for topic in &sub_packet.subscription_topics {
-                let subscription = Subs{client_id: sub_packet.packet_id.clone().to_string()};
-
-                // store in unsubscriptions list
-                self.unsub_list.push(topic.topic_filter.clone());
-
-                // store in subscriptions list
-                println!("SubTree count: \t{}",self.subscriptions.insert(&topic.topic_filter, subscription));
-                // let match_subs = self.subscriptions.matching_subscribers(topic);
-                // println!("Matching Subscribers: \t{:?}" , self.subscriptions.matching_subscribers(topic.parse().unwrap()));
+        // accept a subscribe packet
+        pub fn accept_sub(&mut self, addr: &str, packet: SubscribePacket) -> SubscribeAckPacket {
+            self.num_packets +=1;
+            let mut cli: Client = Client::new(String::new(), String::new());
+            // find the client in reference
+            for client in self.client_list.clone() {
+                if client.address.eq(&addr.to_string()) {
+                    cli = client.clone();
+                } 
             }
 
-            let sub_ack = SubscribeAckPacket {
-                packet_id: sub_packet.packet_id.clone(),
-                reason_codes: vec![SubscribeAckReason::GrantedQoSZero],
-                reason_string: None,
-                user_properties:  Vec::new(),
-            };
+            // if not found
+            if cli.client_id.trim().is_empty() {
+                println!("Client not found");
+                let sub_ack = SubscribeAckPacket {
+                    packet_id:packet.packet_id.clone(),
+                    reason_codes: vec![SubscribeAckReason::NotAuthorized],
+                    reason_string: Some(ReasonString("Client is not recognized by Broker".to_string())),
+                    user_properties: Vec::new()
+                };
+                return sub_ack;
+            }
 
-            sub_ack
+            // get each topic from the packet
+            for topic in &packet.subscription_topics {
+                // check if the topic exists
+                match &topic.topic_filter {
+                    TopicFilter::Concrete { filter, level_count:_ } =>
+                    {
+                        println!("Concrete entered"); 
+                        // add to the subscription list
+                        match self.concrete_subscriptions_list.get_mut(filter) {
+                            Some(entry) => {
+                                entry.push(Client { client_id: cli.client_id.clone(), address: addr.to_string()})
+                            },
+                            None => {
+                                self.concrete_subscriptions_list.insert(filter.to_string(), vec![Client { client_id: cli.client_id.clone(), address: addr.to_string() }]);
+                            }
+                        }
+                    }
+                    _=> {   // other filter types aren't accepted
+                        println!("Other filter entered");
+                        return SubscribeAckPacket { 
+                            packet_id:packet.packet_id.clone(),
+                            reason_codes: vec![SubscribeAckReason::NotAuthorized],
+                            reason_string: Some(ReasonString("TopicFilter is not recognized by Broker".to_string())),
+                            user_properties: Vec::new() };
+                    }
+                };
+            }
+            println!("Success");
+            SubscribeAckPacket { 
+                packet_id: packet.packet_id.clone() + 1, 
+                reason_string: None, 
+                user_properties: Vec::new(), 
+                reason_codes: vec![SubscribeAckReason::GrantedQoSZero]
+            }
+        } // end subscribe
+
+        pub fn accept_pub(&mut self, packet: PublishPacket) -> PublishAckPacket {
+            self.num_packets +=1;
+            let topic = packet.topic.topic_name();
+
+            let list = self.concrete_subscriptions_list.get_key_value(topic);
+            // find the topic in the subscriptions list
+            if list.is_some() {
+                
+            }
+            else { // add to the outgoing storage
+                self.store_outgoing_publish.push(packet);
+            }
+
+            PublishAckPacket { 
+                packet_id: self.num_packets +1, 
+                reason_code: PublishAckReason::Success, 
+                reason_string: None, 
+                user_properties: vec![] 
+            }
+        } // end publish
+
+        pub fn get_client_list(&mut self) {
+            println!("Printing current client list...\n{:?}\n", self.client_list)
         }
-        // loop through subscription_topics attribute
-        // add to subscription tree of specified type T
-        // collect the QoS
-        // create subscribe_ack packet
-        // add the collected QoS
-        // send the client the ack
 
-        // receive publish packet
-        // resources : publish_message
-        // input : publish packet
-        // pub fn accept_publish_packet (&mut self, pub_packet: PublishPacket) -> PublishAckPacket {
-
-        // }
-
+        pub fn get_sub_list(&mut self) {
+            println!("Printing current topic-client list...");
+            for (k, v) in &self.concrete_subscriptions_list {
+                println!("topic: {:?} \tclient list: {:?}", k,v);
+            }
+        }
     }
 }

@@ -31,10 +31,12 @@ pub mod tree {
             counter
         }
 
+        #[allow(dead_code)]
         pub fn matching_subscribers(&self, topic: &Topic) -> impl Iterator<Item = &T> {
             self.root.matching_subscribers(topic)
         }
 
+        #[allow(dead_code)]
         pub fn remove(&mut self, topic_filter: &TopicFilter, counter: u64) -> Option<T> {
             self.root.remove(topic_filter, counter)
         }
