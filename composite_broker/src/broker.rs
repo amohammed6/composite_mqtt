@@ -2,7 +2,7 @@ pub mod broker {
     use std::collections::HashMap;
     use mqtt_v5::{topic::TopicFilter, types::{ConnectAckPacket, ConnectPacket, ConnectReason, 
         properties::AssignedClientIdentifier, SubscribeAckPacket, SubscribePacket, SubscribeAckReason,
-        properties::ReasonString, PublishPacket, PublishAckPacket, PublishAckReason, UnsubscribePacket
+        properties::ReasonString, PublishPacket, PublishAckPacket, PublishAckReason
     }};
 
     
@@ -18,16 +18,6 @@ pub mod broker {
             Client {client_id: client, address: address}
         }
     }
-
-    // #[derive(Debug)]
-    // pub enum BrokerMessage {
-    //     // NewClient(Box<ConnectPacket>, Sender<ClientMessage>),
-    //     Publish(String, Box<PublishPacket>),
-    //     PublishAck(String, PublishAckPacket), // TODO - This can be handled by the client task
-    //     Subscribe(String, SubscribePacket), // TODO - replace string client_id with int
-    //     Unsubscribe(String, UnsubscribePacket), // TODO - replace string client_id with int
-    //     // Disconnect(String, WillDisconnectLogic),
-    // }
 
     #[derive(Debug, Clone)]
     #[allow(dead_code)]
@@ -52,6 +42,8 @@ pub mod broker {
         } // end new
 
         // accept a connect packet
+        // param: address of the client, connect packet
+        // return: connect ack
         pub fn accept_connect(&mut self, addr: &str, connect_packet: ConnectPacket) -> ConnectAckPacket {
             // make a new client 
             let c: Client = Client::new(connect_packet.client_id.clone(), addr.to_string());
@@ -106,7 +98,7 @@ pub mod broker {
                 match &topic.topic_filter {
                     TopicFilter::Concrete { filter, level_count:_ } =>
                     {
-                        println!("Concrete entered"); 
+                        // println!("Concrete entered"); 
                         // add to the subscription list
                         match self.concrete_subscriptions_list.get_mut(filter) {
                             Some(entry) => {
@@ -136,25 +128,37 @@ pub mod broker {
             }
         } // end subscribe
 
-        pub fn accept_pub(&mut self, packet: PublishPacket) -> PublishAckPacket {
+        // return the client address (String) and the publish ack packet
+        pub fn accept_pub(&mut self, addr: &str, packet: PublishPacket) -> (PublishAckPacket, Vec<String>) {
             self.num_packets +=1;
-            let topic = packet.topic.topic_name();
+            // create return variables
+            let mut ret_clients : Vec<String> = Vec::new();
+            ret_clients.push(addr.to_string());         // the ack will be sent to the client address, pushed first
 
+            // look for the clients that are subscribed to the topic
+            let topic = packet.topic.topic_name();
             let list = self.concrete_subscriptions_list.get_key_value(topic);
             // find the topic in the subscriptions list
             if list.is_some() {
-                
+                let clients = list.unwrap().1;
+                // add the addresses for the clients that are subscribed to the topic to the return vector
+                for cli in clients {
+                    ret_clients.push(cli.address.clone());
+                }
             }
             else { // add to the outgoing storage
                 self.store_outgoing_publish.push(packet);
             }
 
-            PublishAckPacket { 
+            // make the ack packet
+            let ack = PublishAckPacket { 
                 packet_id: self.num_packets +1, 
                 reason_code: PublishAckReason::Success, 
                 reason_string: None, 
                 user_properties: vec![] 
-            }
+            };
+            
+            (ack, ret_clients)
         } // end publish
 
         pub fn get_client_list(&mut self) {
