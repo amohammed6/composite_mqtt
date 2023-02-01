@@ -88,7 +88,8 @@ fn main() -> io::Result<()>{
 mod tests {
     use crate::broker::broker::MBroker;
     use mqtt_v5::{types::{Packet, PublishPacket, SubscribePacket, ConnectPacket, ConnectReason, QoS,
-        ProtocolVersion, RetainHandling, SubscribeAckReason, SubscriptionTopic}, topic::TopicFilter};
+        ProtocolVersion, RetainHandling, SubscribeAckReason, PublishAckReason, SubscriptionTopic}, 
+        topic::{TopicFilter, Topic}};
     use bytes::{Bytes, BytesMut};
     use crate::msg_parser::msg_parser::{cm_decode, cm_encode};
     
@@ -451,5 +452,121 @@ mod tests {
         let r3 = broker.accept_sub(ADDR, sub_p3);
         assert_eq!(r3.reason_codes.contains(&Some(SubscribeAckReason::GrantedQoSZero).unwrap()), true);
     }
-    
+  
+    #[test]
+    fn test_new_pub() {
+        let mut broker = MBroker::new();
+        let id = "1004".to_string();
+        // Create a client's connect packet
+        let conn_p1 = ConnectPacket {
+            protocol_name: String::from("cm_mqtt"),
+            protocol_version: ProtocolVersion::V500,
+            clean_start: true,
+            keep_alive: 1,
+            user_properties: Vec::new(),
+            client_id: id,
+            session_expiry_interval: None,receive_maximum: None, maximum_packet_size: None,
+            topic_alias_maximum: None,request_response_information: None, request_problem_information: None,
+            authentication_method: None, authentication_data: None, will: None,user_name: None,password: None,
+        };
+        broker.accept_connect(ADDR, conn_p1);
+
+        // create a subscribe packet
+        let sub_p = SubscribePacket {
+            packet_id: 01,
+            subscription_identifier: None,
+            user_properties: Vec::new(),
+            subscription_topics: vec![SubscriptionTopic {
+                topic_filter: TopicFilter::Concrete { filter: "gwu".to_string(), level_count: 1 },
+                maximum_qos: QoS::AtMostOnce,
+                no_local: false,
+                retain_as_published: false,
+                retain_handling: RetainHandling::SendAtSubscribeTime,
+            }],
+        };
+        broker.accept_sub(ADDR, sub_p);
+
+        // create publish packet
+        let pub_p = PublishPacket {
+            is_duplicate: false,
+            qos: QoS::AtMostOnce, 
+            retain: false,
+            user_properties: Vec::new(),
+            topic: "gwu".parse::<Topic>().unwrap(),
+            payload: Bytes::from("George Washington University"),
+            packet_id: None, payload_format_indicator: None, message_expiry_interval: None, 
+            topic_alias: None, response_topic: None, content_type: None, correlation_data: None, 
+            subscription_identifier: None
+        };
+
+        let res = broker.accept_pub(ADDR, pub_p);
+        assert_eq!(res.0.reason_code, PublishAckReason::Success);
+        println!("{:?}", res.1);  // two expected
+    }
+
+    #[test]
+    fn test_new_pub_2clients() {
+        let mut broker = MBroker::new();
+        let id = "1004".to_string();
+        // Create a client's connect packet
+        let conn_p1 = ConnectPacket {
+            protocol_name: String::from("cm_mqtt"),
+            protocol_version: ProtocolVersion::V500,
+            clean_start: true,
+            keep_alive: 1,
+            user_properties: Vec::new(),
+            client_id: id,
+            session_expiry_interval: None,receive_maximum: None, maximum_packet_size: None,
+            topic_alias_maximum: None,request_response_information: None, request_problem_information: None,
+            authentication_method: None, authentication_data: None, will: None,user_name: None,password: None,
+        };
+        broker.accept_connect(ADDR, conn_p1);
+
+        let id2 = "1005".to_string();
+        // Create a client's connect packet
+        let conn_p1 = ConnectPacket {
+            protocol_name: String::from("cm_mqtt"),
+            protocol_version: ProtocolVersion::V500,
+            clean_start: true,
+            keep_alive: 1,
+            user_properties: Vec::new(),
+            client_id: id2,
+            session_expiry_interval: None,receive_maximum: None, maximum_packet_size: None,
+            topic_alias_maximum: None,request_response_information: None, request_problem_information: None,
+            authentication_method: None, authentication_data: None, will: None,user_name: None,password: None,
+        };
+        broker.accept_connect("192.0.2.1", conn_p1);
+
+        // create a subscribe packet
+        let sub_p = SubscribePacket {
+            packet_id: 01,
+            subscription_identifier: None,
+            user_properties: Vec::new(),
+            subscription_topics: vec![SubscriptionTopic {
+                topic_filter: TopicFilter::Concrete { filter: "gwu".to_string(), level_count: 1 },
+                maximum_qos: QoS::AtMostOnce,
+                no_local: false,
+                retain_as_published: false,
+                retain_handling: RetainHandling::SendAtSubscribeTime,
+            }],
+        };
+        broker.accept_sub(ADDR, sub_p);
+
+        // create publish packet
+        let pub_p = PublishPacket {
+            is_duplicate: false,
+            qos: QoS::AtMostOnce, 
+            retain: false,
+            user_properties: Vec::new(),
+            topic: "gwu".parse::<Topic>().unwrap(),
+            payload: Bytes::from("George Washington University"),
+            packet_id: None, payload_format_indicator: None, message_expiry_interval: None, 
+            topic_alias: None, response_topic: None, content_type: None, correlation_data: None, 
+            subscription_identifier: None
+        };
+
+        let res = broker.accept_pub("192.0.2.1", pub_p);
+        assert_eq!(res.0.reason_code, PublishAckReason::Success);
+        println!("{:?}", res.1);  // two expected
+    }
 }
