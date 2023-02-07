@@ -2,8 +2,9 @@ use std::str;
 use std::net::TcpStream;
 use std::io::{self,Write, prelude::*,BufReader}; 
 use mqtt_v5::{encoder, types::{Packet, ConnectPacket, PublishPacket, SubscribePacket, SubscriptionTopic, QoS, 
-    RetainHandling, ProtocolVersion}};
+    RetainHandling, ProtocolVersion}, topic::{TopicFilter, Topic}};
 use bytes::{Bytes, BytesMut};
+// use crate::msg_parser::msg_parser::cm_encode;
 
 fn send_connect(mut stream: &TcpStream) {
     // make connect packet
@@ -13,7 +14,7 @@ fn send_connect(mut stream: &TcpStream) {
         clean_start: true,
         keep_alive: 1,
         user_properties: Vec::new(),
-        client_id: String::from("1004"),
+        client_id: String::from("1001"),
         session_expiry_interval: None,
         receive_maximum: None,
         maximum_packet_size: None,
@@ -36,6 +37,15 @@ fn send_connect(mut stream: &TcpStream) {
 
     // write to stream
     stream.write(buf.as_mut()).expect("failed to send connect packet");
+
+    // // Add buffering so that the receiver can read messages from the stream
+    // let mut reader =BufReader::new(stream);
+    // let mut buffer: BytesMut::new();               // Check if this input message values are u8
+    // reader.read_until(b'\n',&mut buffer)?;              // Read input information
+
+    // // Decode and check that it's a connect ack
+    // let res_packet = decoder::decode_mqtt(&mut buffer, ProtocolVersion::V500);
+
 }
 
 fn send_sub(mut stream: &TcpStream, topic_name: String, packet_num: &u16) -> u16 {
@@ -46,7 +56,9 @@ fn send_sub(mut stream: &TcpStream, topic_name: String, packet_num: &u16) -> u16
         subscription_identifier: None,
         user_properties: Vec::new(),
         subscription_topics: vec![SubscriptionTopic {
-            topic_filter: v[1].parse().unwrap(),
+            topic_filter: TopicFilter::Concrete { 
+                filter: v[1].strip_suffix("\n").expect("Can't strip").parse().unwrap(), 
+                level_count: 1 },
             maximum_qos: QoS::AtLeastOnce,
             no_local: false,
             retain_as_published: false,
@@ -78,7 +90,7 @@ fn send_pub(mut stream: &TcpStream, args: String, packet_num: &u16) ->u16 {
         is_duplicate: false,
         qos: QoS::AtLeastOnce,
         retain: true,
-        topic: topic_name.clone().split_at(8).1.parse().unwrap(),
+        topic: topic_name.clone().split_at(8).1.parse::<Topic>().unwrap(),
         user_properties: Vec::new(),
         payload: Bytes::from(content.clone()), // immutable to preserve security,
         packet_id: Some(*packet_num),                 // required

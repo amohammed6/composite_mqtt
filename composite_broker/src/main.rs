@@ -3,15 +3,21 @@ mod msg_parser;
 use std::io;
 // use bytes::{BytesMut};
 use std::time;
+use crate::broker::broker::MBroker;
+// use crate::msg_parser::msg_parser::cm_encode;
+// use bytes::BytesMut;
+use mqtt_v5::types::Packet;
 use std ::net::{TcpListener,TcpStream};
 use std::io::{Read,Write};
 use std::thread;
 use crate::msg_parser::msg_parser::{cm_decode};
-use mqtt_v5::types::{Packet}; // ConnectPacket. decoder, ProtocolVersion
+// use mqtt_v5::types::{Packet::{}}; // ConnectPacket. decoder, ProtocolVersion
+
+// static mut BROKER: MBroker = MBroker::new();
 
 // Handle access stream; create a struct to hold the stream’s state
 // Perform I/O operations
-fn handle_sender(mut stream: TcpStream) -> io::Result<()>{
+fn handle_sender(mut stream: TcpStream, addr: &str, mut broker: MBroker) -> io::Result<()>{
 
     // Handle multiple access stream
     let mut buf = [0;512];
@@ -35,15 +41,19 @@ fn handle_sender(mut stream: TcpStream) -> io::Result<()>{
             let decode = cm_decode(&mut buf);
 
             match decode {
-                Ok(Packet::Connect(p)) => 
-                    println!("\tConnect packet received with ID {}\n", p.client_id)
-                ,
-                Ok(Packet::Publish(p)) => 
-                    println!("\tPublish packet received for topic {} with date: {}", p.topic.to_string().trim(), String::from_utf8_lossy(&p.payload))
-                ,
-                Ok(Packet::Subscribe(p)) => 
-                    println!("\tSubscribe packet received with packet ID {} and topic {}", p.packet_id, p.subscription_topics[0].topic_filter.to_string())
-                ,
+                Ok(Packet::Connect(p)) => {
+                    broker.accept_connect(addr, p);         // connect to the broker
+                    broker.get_client_list();                               // show the client list
+                },
+                Ok(Packet::Publish(p)) => {
+                    broker.accept_pub(addr, p);
+                    broker.get_outgoing_list();
+                },
+                Ok(Packet::Subscribe(p)) => {
+                    broker.accept_sub(addr, p);
+                    broker.get_sub_list();
+                },
+                
                 _ => panic!("Incorrect type returned"),
             };
         }
@@ -57,27 +67,28 @@ fn handle_sender(mut stream: TcpStream) -> io::Result<()>{
 
 
 fn main() -> io::Result<()>{
+    let broker = MBroker::new();
     // Enable port 7878 binding
     let receiver_listener = TcpListener::bind("127.0.0.1:7878").expect("Failed and bind with the sender");
     // Getting a handle of the underlying thread.
-    let mut thread_vec: Vec<thread::JoinHandle<()>> = Vec::new();
+    // let mut thread_vec: Vec<thread::JoinHandle<()>> = Vec::new();
     // listen to incoming connections messages and bind them to a sever socket address.
     for stream in receiver_listener.incoming() {
         let stream = stream.expect("failed");
         // let the receiver connect with the sender
-        let handle = thread::spawn(move || {
+        // let handle = thread::spawn(move || {
             //receiver failed to read from the stream
-            handle_sender(stream).unwrap_or_else(|error| eprintln!("{:?}",error))
-        });
+            handle_sender(stream, "127.0.0.1:7878", broker.clone()).unwrap_or_else(|error| eprintln!("{:?}",error))
+        // });
         
         // Push messages in the order they are sent
-        thread_vec.push(handle);
+        // thread_vec.push(handle);
     }
 
-    for handle in thread_vec {
-        // return each single value Output contained in the heap
-        handle.join().unwrap();
-    }
+    // for handle in thread_vec {
+    //     // return each single value Output contained in the heap
+    //     handle.join().unwrap();
+    // }
     // success value
     Ok(())
 }
@@ -94,6 +105,7 @@ mod tests {
     use crate::msg_parser::msg_parser::{cm_decode, cm_encode};
     
     static ADDR: &str = "127.0.0.1:7878"; 
+    static ADDR2: &str = "192.0.2.1";
 
     #[test]
     fn test_read_publish_packet() {
@@ -196,7 +208,12 @@ mod tests {
     
         let res = broker.accept_connect(ADDR, conn_p);
         broker.get_client_list();
-        assert_eq!(res.reason_code, ConnectReason::Success);
+        match res {
+            Packet::ConnectAck(p) => {
+                assert_eq!(p.reason_code, ConnectReason::Success);
+            },
+            _=> {}
+        }
     }
 
     
@@ -247,10 +264,20 @@ mod tests {
         let r1 = broker.accept_connect(ADDR, conn_p1);
         let r2 = broker.accept_connect(ADDR, conn_p2);
         broker.get_client_list();
-        assert_eq!(r1.reason_code, ConnectReason::Success);
-        assert_eq!(r2.reason_code, ConnectReason::Success);
+        match r1 {
+            Packet::ConnectAck(p) => {
+                assert_eq!(p.reason_code, ConnectReason::Success);
+            },
+            _=> {}
+        }
+
+        match r2 {
+            Packet::ConnectAck(p) => {
+                assert_eq!(p.reason_code, ConnectReason::Success);
+            },
+            _=> {}
+        }
     }
-    
 
     
     #[test]
@@ -507,7 +534,7 @@ mod tests {
     #[test]
     fn test_new_pub_2clients() {
         let mut broker = MBroker::new();
-        let id = "1004".to_string();
+        // let id = "1004".to_string();
         // Create a client's connect packet
         let conn_p1 = ConnectPacket {
             protocol_name: String::from("cm_mqtt"),
@@ -515,14 +542,13 @@ mod tests {
             clean_start: true,
             keep_alive: 1,
             user_properties: Vec::new(),
-            client_id: id,
+            client_id: ADDR.to_string(),
             session_expiry_interval: None,receive_maximum: None, maximum_packet_size: None,
             topic_alias_maximum: None,request_response_information: None, request_problem_information: None,
             authentication_method: None, authentication_data: None, will: None,user_name: None,password: None,
         };
         broker.accept_connect(ADDR, conn_p1);
 
-        let id2 = "1005".to_string();
         // Create a client's connect packet
         let conn_p1 = ConnectPacket {
             protocol_name: String::from("cm_mqtt"),
@@ -530,12 +556,12 @@ mod tests {
             clean_start: true,
             keep_alive: 1,
             user_properties: Vec::new(),
-            client_id: id2,
+            client_id: ADDR2.to_string(),
             session_expiry_interval: None,receive_maximum: None, maximum_packet_size: None,
             topic_alias_maximum: None,request_response_information: None, request_problem_information: None,
             authentication_method: None, authentication_data: None, will: None,user_name: None,password: None,
         };
-        broker.accept_connect("192.0.2.1", conn_p1);
+        broker.accept_connect(ADDR2, conn_p1);
 
         // create a subscribe packet
         let sub_p = SubscribePacket {

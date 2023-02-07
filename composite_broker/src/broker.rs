@@ -2,11 +2,11 @@ pub mod broker {
     use std::collections::HashMap;
     use mqtt_v5::{topic::TopicFilter, types::{ConnectAckPacket, ConnectPacket, ConnectReason, 
         properties::AssignedClientIdentifier, SubscribeAckPacket, SubscribePacket, SubscribeAckReason,
-        properties::ReasonString, PublishPacket, PublishAckPacket, PublishAckReason
+        properties::ReasonString, PublishPacket, PublishAckPacket, PublishAckReason, Packet
     }};
 
     
-    #[derive(Debug, Clone)]
+    #[derive(Debug, Clone, PartialEq)]
     #[allow(dead_code)]
     pub struct Client {
         client_id: String,
@@ -23,10 +23,11 @@ pub mod broker {
     #[allow(dead_code)]
     pub struct MBroker {
         num_packets: u16,
+        num_clients: u16,
         client_list: Vec<Client>,
         concrete_subscriptions_list: HashMap<String, Vec<Client>>,
         store_outgoing_publish: Vec<PublishPacket>,
-    }
+    } 
 
     #[allow(dead_code)]
     impl MBroker {
@@ -35,6 +36,7 @@ pub mod broker {
         pub fn new() -> Self {
             Self { 
                 num_packets: 2000,
+                num_clients: 0,
                 client_list: Vec::new(), 
                 concrete_subscriptions_list: HashMap::new(),
                 store_outgoing_publish: Vec::new(),
@@ -44,15 +46,33 @@ pub mod broker {
         // accept a connect packet
         // param: address of the client, connect packet
         // return: connect ack
-        pub fn accept_connect(&mut self, addr: &str, connect_packet: ConnectPacket) -> ConnectAckPacket {
+        pub fn accept_connect(&mut self, addr: &str, connect_packet: ConnectPacket) -> Packet {
+            // error checking that client isn't already connected
+            if self.find_client_by_address(addr) {
+                let packet = Packet::ConnectAck(ConnectAckPacket {
+                    session_present: true,
+                    assigned_client_identifier: Some(AssignedClientIdentifier(
+                        connect_packet.client_id.clone(),
+                    )),
+                    reason_code: ConnectReason::ClientIdentifierNotValid,
+                    user_properties: vec![],
+                    session_expiry_interval:None, receive_maximum:None, maximum_qos:None, retain_available:None, 
+                    maximum_packet_size:None, topic_alias_maximum:None, reason_string:None, response_information:None,
+                    wildcard_subscription_available:None, subscription_identifiers_available:None,
+                    shared_subscription_available:None, server_keep_alive:None, server_reference:None,
+                    authentication_data:None, authentication_method:None,
+                });
+                return packet
+            }
             // make a new client 
-            let c: Client = Client::new(connect_packet.client_id.clone(), addr.to_string());
+            self.num_clients += 1;
+            let c: Client = Client::new(self.num_clients.to_string(), addr.to_string());
 
             // add to client list
             self.client_list.push(c);
 
             // create connect_ack packet
-            let conn_ack = ConnectAckPacket {
+            let conn_ack = Packet::ConnectAck(ConnectAckPacket {
                 session_present: true,
                 assigned_client_identifier: Some(AssignedClientIdentifier(
                     connect_packet.client_id.clone(),
@@ -64,7 +84,7 @@ pub mod broker {
                 wildcard_subscription_available:None, subscription_identifiers_available:None,
                 shared_subscription_available:None, server_keep_alive:None, server_reference:None,
                 authentication_data:None, authentication_method:None,
-            };
+            });
             self.num_packets +=1;
             conn_ack
         } // end connect
@@ -82,7 +102,7 @@ pub mod broker {
 
             // if not found
             if cli.client_id.trim().is_empty() {
-                println!("Client not found");
+                println!("\nClient not found");
                 let sub_ack = SubscribeAckPacket {
                     packet_id:packet.packet_id.clone(),
                     reason_codes: vec![SubscribeAckReason::NotAuthorized],
@@ -110,7 +130,7 @@ pub mod broker {
                         }
                     }
                     _=> {   // other filter types aren't accepted
-                        println!("Other filter entered");
+                        println!("\nOther filter entered");
                         return SubscribeAckPacket { 
                             packet_id:packet.packet_id.clone(),
                             reason_codes: vec![SubscribeAckReason::NotAuthorized],
@@ -119,7 +139,7 @@ pub mod broker {
                     }
                 };
             }
-            println!("Success");
+            println!("\nSuccess");
             SubscribeAckPacket { 
                 packet_id: packet.packet_id.clone() + 1, 
                 reason_string: None, 
@@ -148,6 +168,7 @@ pub mod broker {
             }
             else { // add to the outgoing storage
                 self.store_outgoing_publish.push(packet);
+                println!("\tStored for future subscribers");
             }
 
             // make the ack packet
@@ -161,15 +182,34 @@ pub mod broker {
             (ack, ret_clients)
         } // end publish
 
+        /*
+            HELPER FUNCTION
+        */
         pub fn get_client_list(&mut self) {
-            println!("Printing current client list...\n{:?}\n", self.client_list)
+            println!("\tPrinting current client list...\n\t{:?}\n", self.client_list)
         }
 
         pub fn get_sub_list(&mut self) {
-            println!("Printing current topic-client list...");
+            println!("\tPrinting current topic-client list...");
             for (k, v) in &self.concrete_subscriptions_list {
-                println!("topic: {:?} \tclient list: {:?}", k,v);
+                println!("\tTopic: {:?} \n\t\tClient List: {:?}", k,v);
             }
+            println!();
+        }
+
+        pub fn get_outgoing_list(&mut self) {
+            println!("\tPrinting current outgoing list...");
+            for p in &self.store_outgoing_publish {
+                println!("Packet topic: {:?}", p.topic.topic_name())
+            }
+            println!();
+        }
+
+        fn find_client_by_address(&mut self, addr: &str) -> bool {
+            for cl in &self.client_list {
+                if cl.address == addr.to_string() {return true;}
+            }
+            false
         }
     }
 }
