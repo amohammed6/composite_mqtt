@@ -1,12 +1,14 @@
-use std::str;
-use std::net::TcpStream;
-use std::io::{self,Write, prelude::*,BufReader}; 
+mod msg_parser;
+use std::{str,env};
+use std::net::{UdpSocket}; // SocketAddr
+use std::borrow::Borrow;
+use std::io::{self};  // ,Write, prelude::*,BufReader
 use mqtt_v5::{encoder, types::{Packet, ConnectPacket, PublishPacket, SubscribePacket, SubscriptionTopic, QoS, 
-    RetainHandling, ProtocolVersion}, topic::{TopicFilter, Topic}};
+    RetainHandling, ProtocolVersion}, topic::{TopicFilter, Topic}}; // decoder
 use bytes::{Bytes, BytesMut};
-// use crate::msg_parser::msg_parser::cm_encode;
+use crate::msg_parser::msg_parser::{cm_decode};
 
-fn send_connect(mut stream: &TcpStream) {
+fn send_connect() -> BytesMut {
     // make connect packet
     let packet = Packet::Connect(ConnectPacket {
         protocol_name: String::from("cm_mqtt"),
@@ -30,29 +32,19 @@ fn send_connect(mut stream: &TcpStream) {
 
     // encode it
     let mut buf = BytesMut::new();      // create buffer for encoding
-    // cm_encode(packet, &mut buf); 
     encoder::encode_mqtt(&packet, &mut buf, ProtocolVersion::V500);
 
-    println!("\tSending ConnectPacket for a new client with ID: 1004\n");
-
-    // write to stream
-    stream.write(buf.as_mut()).expect("failed to send connect packet");
-
-    // // Add buffering so that the receiver can read messages from the stream
-    // let mut reader =BufReader::new(stream);
-    // let mut buffer: BytesMut::new();               // Check if this input message values are u8
-    // reader.read_until(b'\n',&mut buffer)?;              // Read input information
-
-    // // Decode and check that it's a connect ack
-    // let res_packet = decoder::decode_mqtt(&mut buffer, ProtocolVersion::V500);
-
+    // return it
+    println!("\tSending ConnectPacket for a new client\n");
+    buf
 }
 
-fn send_sub(mut stream: &TcpStream, topic_name: String, packet_num: &u16) -> u16 {
+fn send_sub(topic_name: String, packet_num: &u16) -> (u16, BytesMut) {
     let v: Vec<&str> = topic_name.split(" ").collect();
+    let p_num = *packet_num;
     // make sub packet
     let packet = Packet::Subscribe(SubscribePacket {
-        packet_id: *packet_num,
+        packet_id: p_num,
         subscription_identifier: None,
         user_properties: Vec::new(),
         subscription_topics: vec![SubscriptionTopic {
@@ -65,26 +57,20 @@ fn send_sub(mut stream: &TcpStream, topic_name: String, packet_num: &u16) -> u16
             retain_handling: RetainHandling::SendAtSubscribeTime,
         }],
     });
-    // increment the packet number
-    let p_num = *packet_num;
 
     // encode it
-    let mut buf = BytesMut::new();      // create buffer for encoding
-    // cm_encode(packet, &mut buf); 
+    let mut buf = BytesMut::new();      // create buffer for encoding 
     encoder::encode_mqtt(&packet, &mut buf, ProtocolVersion::V500);
 
+    // return it
     println!("\tSending SubscribePacket for topic: {}", v[1]);
-
-    // write to stream
-    stream.write(buf.as_mut()).expect("failed to send subscribe packet");
-
-    p_num + 1
+    (p_num + 1, buf)
 }
 
-fn send_pub(mut stream: &TcpStream, args: String, packet_num: &u16) ->u16 {
-    // let v: Vec<&str> = args.split(':').collect();
+fn send_pub(args: String, packet_num: &u16) -> (u16, BytesMut) {
     let topic_name = args.split(':').collect::<Vec<&str>>()[0];
     let content: String = args.split(':').collect::<Vec<&str>>()[1].to_string();
+    let p_num = *packet_num;
     // make publish packet
     let packet = Packet::Publish(PublishPacket {
         is_duplicate: false,
@@ -102,25 +88,108 @@ fn send_pub(mut stream: &TcpStream, args: String, packet_num: &u16) ->u16 {
         subscription_identifier: None,
         content_type: None,
     });
-    // increment the packet number
-    let p_num = *packet_num;
 
     // encode it
     let mut buf = BytesMut::new();      // create buffer for encoding
-    // cm_encode(packet, &mut buf); 
     encoder::encode_mqtt(&packet, &mut buf, ProtocolVersion::V500);
 
-    println!("\tSending PublishPacket for topic '{}' with data: {}", topic_name.clone().split_at(9).1, content.clone());
+    // return it
+    println!("\tSending PublishPacket for topic '{}'", topic_name.clone().split_at(9).1);
+    return (p_num + 1, buf);
 
-    // write to stream
-    stream.write(buf.as_mut()).expect("failed to send subscribe packet");
+    // send to broker
+    // socket.send_to(buf.as_mut(), addr).expect("Couldn't send to broker");
 
-    p_num + 1
+    // // receive ack packet
+    // let mut ack_buffer = BytesMut::new();
+    // socket.recv_from(&mut ack_buffer).expect("Could not read ack packet into buffer");
+
+    // // check that the received bytes are the ack packet
+    // let p = decoder::decode_mqtt(&mut ack_buffer, ProtocolVersion::V500).unwrap().unwrap();
+    // match p {
+    //     Packet::PublishAck(p) => {
+    //         println!("Publish Ack packet received: {:?}", p.reason_string);
+    //     },
+    //     _ => {println!("Publish Ack packet not received");}
+    // };
+
+    // // increment the packet number
+    // packet_num + 1
 }
+
+/*
+    I change the port with each run
+    Run with 
+        cargo run -- 127.0.0.1 8000
+        cargo run -- 127.0.0.1 7878
+*/
 
 fn main() -> io::Result<()>{
     let mut packet_num = 00;
+    // collect address from command line
+    let args: Vec<String> = env::args().collect();
+    // concatenate to make the socket addr
+    let bind_addr = args[1].clone() + ":"+ args[2].borrow();
+
+    // make the socket
+    let socket = UdpSocket::bind(bind_addr).expect("Could not bind client socket");
+
+    loop {
+        let mut input = String::new();
+        let mut ack_buffer = [0u8; 1500];
+        let mut ret_buf = BytesMut::new();
+        // let sock = socket.try_clone().expect("Failed to clone socket");    // use socket clone to send to broker
+        // let sock_addr = sock.local_addr().unwrap();
+
+        // read the input from the command line
+        io::stdin().read_line(&mut input).expect("Failed to read from stdin");
+        // send the message to the broker
+        socket.send_to(input.as_bytes(), args[1].clone() + ":8888").expect("Failed to write to server");
+
+        // add logic for calling the functions
+        if input.contains("connect") {
+            ret_buf = send_connect();
+        }
+        else if input.contains("sub") {
+            let res = send_sub(input, &packet_num);
+            packet_num = res.0;
+            ret_buf = res.1;
+        }
+        else if input.contains("pub") {
+            let res = send_pub(input, &packet_num);
+            packet_num = res.0;
+            ret_buf = res.1
+            // packet_num = 
+        }
+
+        // send it to the broker
+        socket.send_to(&ret_buf.as_mut(), args[1].clone() + ":8888").expect("Couldn't send to broker");
+
+        // receive from broker
+        socket.recv_from(&mut ack_buffer.as_mut()).expect("Could not read into buffer");
+
+        // check that the received bytes are the ack packet
+        let p = cm_decode(&ack_buffer);
+        match p {
+            Ok(Packet::ConnectAck(p)) => {
+                println!("Connect Ack packet received: {:?}\n", p.reason_string.unwrap().0);
+            },
+            Ok(Packet::SubscribeAck(p)) => {
+                println!("Subscribe Ack packet received: {:?}\n", p.reason_string.unwrap().0);
+            },
+            Ok(Packet::PublishAck(p)) => {
+                println!("Publish Ack packet received: {:?}\n", p.reason_string.unwrap().0);
+            }
+            _=> {
+                println!("Ack packet not received");
+            }
+        }
+    }
+
+    /* 
+    let mut packet_num = 00;
     // Struct used to start requests to the server.
+    // let args: Vec<String> = env::args().collect(); // 0.0.0.0:8888, 127.0.0.1:7878, 127.0.0.1:8888
     let mut stream = TcpStream::connect("127.0.0.1:7878")?;             // Check TcpStream Connection to the server
     println!("TCP Connection to MusQraTT Broker Starting...");
     for _ in 0..1000 {
@@ -148,5 +217,6 @@ fn main() -> io::Result<()>{
         }
         // println!("");
     }
-    Ok(())
+    */
+    // Ok(())
 }
