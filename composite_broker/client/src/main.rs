@@ -76,7 +76,7 @@ fn send_pub(args: String, packet_num: &u16) -> (u16, BytesMut) {
         is_duplicate: false,
         qos: QoS::AtLeastOnce,
         retain: true,
-        topic: topic_name.clone().split_at(8).1.parse::<Topic>().unwrap(),
+        topic: topic_name.clone().split_at(9).1.parse::<Topic>().unwrap(),
         user_properties: Vec::new(),
         payload: Bytes::from(content.clone()), // immutable to preserve security,
         packet_id: Some(*packet_num),                 // required
@@ -96,25 +96,16 @@ fn send_pub(args: String, packet_num: &u16) -> (u16, BytesMut) {
     // return it
     println!("\tSending PublishPacket for topic '{}'", topic_name.clone().split_at(9).1);
     return (p_num + 1, buf);
+}
 
-    // send to broker
-    // socket.send_to(buf.as_mut(), addr).expect("Couldn't send to broker");
-
-    // // receive ack packet
-    // let mut ack_buffer = BytesMut::new();
-    // socket.recv_from(&mut ack_buffer).expect("Could not read ack packet into buffer");
-
-    // // check that the received bytes are the ack packet
-    // let p = decoder::decode_mqtt(&mut ack_buffer, ProtocolVersion::V500).unwrap().unwrap();
-    // match p {
-    //     Packet::PublishAck(p) => {
-    //         println!("Publish Ack packet received: {:?}", p.reason_string);
-    //     },
-    //     _ => {println!("Publish Ack packet not received");}
-    // };
-
-    // // increment the packet number
-    // packet_num + 1
+fn read_publish_packet(buf: [u8; 1500]) {
+    let p = cm_decode(&buf);
+    match p {
+        Ok(Packet::Publish(p)) => {
+            println!("Received publish packet: {}", String::from_utf8_lossy(&p.payload))
+        },
+        _=>{}
+    }
 }
 
 /*
@@ -137,15 +128,16 @@ fn main() -> io::Result<()>{
     loop {
         let mut input = String::new();
         let mut ack_buffer = [0u8; 1500];
+        // let mut pub_buf = [0u8; 1500];
         let mut ret_buf = BytesMut::new();
-        // let sock = socket.try_clone().expect("Failed to clone socket");    // use socket clone to send to broker
-        // let sock_addr = sock.local_addr().unwrap();
 
         // read the input from the command line
         io::stdin().read_line(&mut input).expect("Failed to read from stdin");
-        // send the message to the broker
-        socket.send_to(input.as_bytes(), args[1].clone() + ":8888").expect("Failed to write to server");
-
+        if input.as_bytes() != "\n".as_bytes() {
+            socket.send_to(input.as_bytes(), args[1].clone() + ":8888").expect("Failed to write to server");
+        }
+        else {continue;}
+        
         // add logic for calling the functions
         if input.contains("connect") {
             ret_buf = send_connect();
@@ -158,27 +150,30 @@ fn main() -> io::Result<()>{
         else if input.contains("pub") {
             let res = send_pub(input, &packet_num);
             packet_num = res.0;
-            ret_buf = res.1
-            // packet_num = 
+            ret_buf = res.1;
         }
 
         // send it to the broker
         socket.send_to(&ret_buf.as_mut(), args[1].clone() + ":8888").expect("Couldn't send to broker");
 
         // receive from broker
-        socket.recv_from(&mut ack_buffer.as_mut()).expect("Could not read into buffer");
+        socket.recv(&mut ack_buffer.as_mut()).expect("Could not read into buffer");
 
         // check that the received bytes are the ack packet
         let p = cm_decode(&ack_buffer);
         match p {
             Ok(Packet::ConnectAck(p)) => {
-                println!("Connect Ack packet received: {:?}\n", p.reason_string.unwrap().0);
+                println!("\tConnect Ack packet received: {:?}\n", p.reason_string.unwrap().0);
             },
             Ok(Packet::SubscribeAck(p)) => {
-                println!("Subscribe Ack packet received: {:?}\n", p.reason_string.unwrap().0);
+                println!("\tSubscribe Ack packet received: {:?}\n", p.reason_string.unwrap().0);
             },
             Ok(Packet::PublishAck(p)) => {
-                println!("Publish Ack packet received: {:?}\n", p.reason_string.unwrap().0);
+                println!("\tPublish Ack packet received: {:?}\n", p.reason_string.unwrap().0);
+                socket.recv(&mut ack_buffer.as_mut()).expect("Could not read into buffer");
+                if !ack_buffer.is_empty() {
+                    read_publish_packet(ack_buffer);
+                }
             }
             _=> {
                 println!("Ack packet not received");

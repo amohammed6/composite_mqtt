@@ -1,9 +1,10 @@
 pub mod broker {
-    use std::collections::HashMap;
+    use std::{collections::HashMap};
     use mqtt_v5::{topic::TopicFilter, types::{ConnectAckPacket, ConnectPacket, ConnectReason, 
         properties::AssignedClientIdentifier, SubscribeAckPacket, SubscribePacket, SubscribeAckReason,
         properties::ReasonString, PublishPacket, PublishAckPacket, PublishAckReason, Packet, self
     }};
+    
 
     
     #[derive(Debug, Clone, PartialEq)]
@@ -27,7 +28,7 @@ pub mod broker {
         num_clients: u16,
         client_list: Vec<Client>,
         concrete_subscriptions_list: HashMap<String, Vec<Client>>,
-        store_outgoing_publish: Vec<PublishPacket>,
+        store_outgoing_publish: HashMap<String, Vec<PublishPacket>>,
     } 
 
     #[allow(dead_code)]
@@ -40,7 +41,7 @@ pub mod broker {
                 num_clients: 0,
                 client_list: Vec::new(), 
                 concrete_subscriptions_list: HashMap::new(),
-                store_outgoing_publish: Vec::new(),
+                store_outgoing_publish: HashMap::new(),
             }
         } // end new
 
@@ -94,9 +95,11 @@ pub mod broker {
         } // end connect
 
 
-        // accept a subscribe packet
+        // accept a subscribe packet -> (Packet, Option<Vec<String>>)
         pub fn accept_sub(&mut self, addr: String, packet: SubscribePacket) -> Packet {
             let addr_port: Vec<&str> = addr.split(":").collect();
+            // let mut stored_packet = false;
+            // let mut outgoing_topics: Vec<String> = Vec::new();
             let mut cli: Client = Client::new(String::new(), String::new(), String::new());
             // find the client in reference
             for client in self.client_list.clone() {
@@ -128,7 +131,13 @@ pub mod broker {
                             Some(entry) => {
                                 // if the topic is already in the list, add the client
                                 entry.push(Client { client_id: cli.client_id.clone(), address: addr_port[0].to_string(), port: addr_port[1].to_string()});
-
+                                // check if packets are waiting to be published to this topic
+                                /* 
+                                if self.store_outgoing_publish.contains_key(&filter.to_string()) {
+                                    // stored_packet = true;
+                                    outgoing_topics.push(filter.to_string());
+                                }
+                                */
                             },
                             None => {
                                 self.concrete_subscriptions_list.insert(filter.to_string(), vec![Client { client_id: cli.client_id.clone(), address: addr_port[0].to_string(), port: addr_port[1].to_string() }]);
@@ -151,7 +160,7 @@ pub mod broker {
                 reason_string: Some(ReasonString("Successful subscription".to_string())), 
                 user_properties: Vec::new(), 
                 reason_codes: vec![SubscribeAckReason::GrantedQoSZero]
-            })
+            }) // Some(outgoing_topics)
         } // end subscribe
 
         // return the client address (String) and the publish ack packet
@@ -173,52 +182,26 @@ pub mod broker {
             self.num_packets +=1;
             // create return variables
             let mut ret_clients : Vec<String> = Vec::new();
-            // ret_clients.push(addr.to_string());         // the ack will be sent to the client address, pushed first
 
-            println!("Current broker state: ");
-            // self.get_sub_list();
-            // self.get_client_list();
-
-            // look for the clients that are subscribed to the topic
-            let topic = packet.topic.topic_name().to_string();
-            // let list = self.concrete_subscriptions_list.get(&topic);
-            // // println!("Keys:");
-            // println!("list: {:?}", list);
-            // for key in self.concrete_subscriptions_list.keys() {
-            //     println!("{key}");
-            // }
-            // println!("Is list exist? {}", self.concrete_subscriptions_list.is_empty());
-            
-            println!("\tPrinting current topic-client list...");
-            for (k, v) in &self.concrete_subscriptions_list {
-                println!("\tTopic: {:?} \n\t\tClient List: {:?}", k,v);
-            }
+            let topic = &packet.topic.topic_name().to_string();           
+            let top = self.concrete_subscriptions_list.get(topic);
 
             // find the topic in the subscriptions list
-            match &self.concrete_subscriptions_list.get(&topic) {
+            match top {
                 Some(list) => {
                     println!("\tFound the topic");
                     // add the addresses for the clients that are subscribed to the topic to the return vector
-                    for cli in *list {
+                    for cli in list {
                         ret_clients.push(cli.address.clone()+":"+&cli.port.clone());
                     }
                 },
                 None => {
-                    // self.store_outgoing_publish.push(packet);
+                    let mut vec_packets : Vec<PublishPacket> = Vec::new();
+                    vec_packets.push(packet);
+                    self.store_outgoing_publish.insert(topic.to_string(),vec_packets);
                     println!("\tStored for future subscribers");    
                 }
             }
-            // if list.is_some() {
-            //     let clients = list.unwrap();
-            //     // add the addresses for the clients that are subscribed to the topic to the return vector
-            //     for cli in clients {
-            //         ret_clients.push(cli.address.clone()+&cli.port.clone());
-            //     }
-            // }
-            // else { // add to the outgoing storage
-            //     self.store_outgoing_publish.push(packet);
-            //     println!("\tStored for future subscribers");
-            // }
 
             // make the ack packet
             let ack = Packet::PublishAck(PublishAckPacket { 
@@ -230,6 +213,20 @@ pub mod broker {
             
             (ack, pub_p, ret_clients)
         } // end publish
+
+        pub fn get_outgoing_packets(&mut self, topic: &String) -> Option<&Vec<PublishPacket>>{
+            let ret = self.store_outgoing_publish.get(topic);
+
+            match ret {
+                Some(list) => {
+                    return Some(list);
+                }
+                _ => {
+                    println!("None available");
+                    return None
+                }
+            }
+        }
 
         /*
             HELPER FUNCTION
@@ -248,8 +245,8 @@ pub mod broker {
 
         pub fn get_outgoing_list(&mut self) {
             println!("\tPrinting current outgoing list...");
-            for p in &self.store_outgoing_publish {
-                println!("Packet topic: {:?}", p.topic.topic_name())
+            for (k, _v) in &self.store_outgoing_publish {
+                println!("Packet topic: {:?}", k)
             }
             println!();
         }
@@ -267,9 +264,11 @@ pub mod broker {
         fn does_topic_exist(&mut self, topic: String) -> bool {
             for (k, _v) in &self.concrete_subscriptions_list {
                 if k.eq(&topic) { 
+                    println!("found");
                     return true;
                 }
             }
+            println!("nope");
             false
         }
     }

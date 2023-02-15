@@ -3,7 +3,7 @@ mod msg_parser;
 use std::{io}; // , time  borrow::Borrow
 use crate::broker::broker::MBroker;
 use bytes::BytesMut;
-use mqtt_v5::types::{Packet}; // PublishPacket
+use mqtt_v5::{types::{Packet}, }; // PublishPacket topic::TopicFilter
 use msg_parser::msg_parser::cm_encode;
 use std ::net::{UdpSocket, SocketAddr};
 // use std::io::{Read,Write};
@@ -11,60 +11,18 @@ use std ::net::{UdpSocket, SocketAddr};
 use crate::msg_parser::msg_parser::{cm_decode};
 
 /* 
-// Handle access stream; create a struct to hold the stream’s state
-// Perform I/O operations
-fn handle_sender(socket: UdpSocket, addr: String, mut broker: MBroker) -> io::Result<()>{
-
-    // Handle multiple access stream
-    let mut buf = [0;512];
-    for _ in 0..1000{
-        let bytes_read = stream.read(&mut buf)?;  // let the receiver get a message from a sender
-        
-        if bytes_read == 0 {
-            // sender stream in a mutable variable
-            return Ok(());
-        }
-
-        stream.write(&buf[..bytes_read])?;
-
-        // Read and determine path for message
-        if String::from_utf8_lossy(&buf).starts_with("mqtt") {// contains("connect") {
-            // if "connect" message received, alert client to send connect packet
-            println!("Incoming command from client");
-        }
-        else {
-            // decoding packet 
-            let decode = cm_decode(&mut buf);
-
-            match decode {
-                Ok(Packet::Connect(p)) => {
-                    broker.accept_connect(addr, p);         // connect to the broker
-                    broker.get_client_list();                               // show the client list
-                },
-                Ok(Packet::Publish(p)) => {
-                    broker.accept_pub(addr, p);
-                    broker.get_outgoing_list();
-                },
-                Ok(Packet::Subscribe(p)) => {
-                    broker.accept_sub(addr, p);
-                    broker.get_sub_list();
-                },
-                
-                _ => panic!("Incorrect type returned"),
-            };
-        }
-        
-        // And you can sleep this connection with the connected sender
-        thread::sleep(time::Duration::from_secs(1));  
+fn publish_packets (buf: BytesMut, socket: &UdpSocket, clients: Vec<String>) {
+    for cli in clients {
+        println!("Sending to client...{}", cli);
+        socket.send_to(&buf, cli).expect("Failed to send to subscriber");
     }
-    // success value
-    Ok(())
 }
 */
-
-// const BROKER: MBroker = MBroker::new();/
 fn handle_packets (broker: &mut MBroker, socket: &UdpSocket, buffer: &[u8;255], addr: SocketAddr) -> MBroker {
     println!("\tPacket being handled");
+    if buffer.is_empty() {
+        return broker.clone();
+    }
     let decode = cm_decode(buffer);
     match decode {
         Ok(Packet::Connect(p)) => {
@@ -81,7 +39,31 @@ fn handle_packets (broker: &mut MBroker, socket: &UdpSocket, buffer: &[u8;255], 
             let mut ret_buf = BytesMut::new();
             assert!(cm_encode(ret_p, &mut ret_buf).is_ok());
             socket.send_to(&ret_buf.as_mut(), addr).expect("Failed to send to client");
-            // broker.get_sub_list()
+            /* 
+            // if stored outgoing are available
+            if ret_p.1.is_some() {
+                let list = Some(ret_p.1).unwrap().unwrap();
+                // get the topic
+                for topic in list {
+                    // get the packets
+                    let packets = broker.get_outgoing_packets(&topic).unwrap();
+                    // publish each packet
+                    for packet in packets {
+                        // make it as a packet
+                        let p = Packet::Publish(PublishPacket { 
+                            is_duplicate: packet.is_duplicate, qos: packet.qos, retain: packet.retain, 
+                            topic: packet.topic, packet_id: packet.packet_id, payload_format_indicator: packet.payload_format_indicator, 
+                            message_expiry_interval: packet.message_expiry_interval, topic_alias: packet.topic_alias, 
+                            response_topic: packet.response_topic, correlation_data: packet.correlation_data, 
+                            user_properties: packet.user_properties, subscription_identifier: packet.subscription_identifier, 
+                            content_type: packet.content_type, payload: packet.payload });
+                            let mut pub_buf = BytesMut::new();
+                            assert!(cm_encode(p, &mut pub_buf).is_ok());
+                            socket.send_to(&pub_buf, addr.to_string()).expect("Failed to send to subscriber");
+                        }
+                }
+            }
+            */
         },
         Ok(Packet::Publish(p)) => {
             // broker.get_sub_list();
@@ -89,13 +71,11 @@ fn handle_packets (broker: &mut MBroker, socket: &UdpSocket, buffer: &[u8;255], 
             // encode the ack packet and the publish packet again
             let client_list = res.2;
             let (mut ack_buf, mut pub_buf) = (BytesMut::new(), BytesMut::new());
-            assert!(cm_encode(res.0, &mut ack_buf).is_ok());
-            assert!(cm_encode(res.1, &mut pub_buf).is_ok());
+            assert!(cm_encode(res.0, &mut ack_buf).is_ok() && cm_encode(res.1, &mut pub_buf).is_ok());
             // send the ack packet to this client
             socket.send_to(&ack_buf, addr).expect("Failed to send to client");
-            // send the publish packet to the other clients
             for cli in client_list {
-                println!("Sending to client...");
+                println!("Sending to client...{}", cli);
                 socket.send_to(&pub_buf, cli).expect("Failed to send to subscriber");
             }
         },
