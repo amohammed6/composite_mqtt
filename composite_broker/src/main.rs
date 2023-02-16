@@ -10,14 +10,6 @@ use std ::net::{UdpSocket, SocketAddr};
 // use std::thread;
 use crate::msg_parser::msg_parser::{cm_decode};
 
-/* 
-fn publish_packets (buf: BytesMut, socket: &UdpSocket, clients: Vec<String>) {
-    for cli in clients {
-        println!("Sending to client...{}", cli);
-        socket.send_to(&buf, cli).expect("Failed to send to subscriber");
-    }
-}
-*/
 fn handle_packets (broker: &mut MBroker, socket: &UdpSocket, buffer: &[u8;255], addr: SocketAddr) -> MBroker {
     println!("\tPacket being handled");
     if buffer.is_empty() {
@@ -27,8 +19,7 @@ fn handle_packets (broker: &mut MBroker, socket: &UdpSocket, buffer: &[u8;255], 
     match decode {
         Ok(Packet::Connect(p)) => {
             println!("\tConnecting...");
-            let ret_p = broker.accept_connect(addr.to_string(), p);         // connect to the broker
-            // broker.get_client_list();                                               // show the client list
+            let ret_p = broker.accept_connect(addr.to_string(), p);
             let mut ret_buf = BytesMut::new();      // will contain encoded bytes
             assert!(cm_encode(ret_p, &mut ret_buf).is_ok());
             socket.send_to(&ret_buf.as_mut(), addr).expect("Failed to send a response");
@@ -39,45 +30,23 @@ fn handle_packets (broker: &mut MBroker, socket: &UdpSocket, buffer: &[u8;255], 
             let mut ret_buf = BytesMut::new();
             assert!(cm_encode(ret_p, &mut ret_buf).is_ok());
             socket.send_to(&ret_buf.as_mut(), addr).expect("Failed to send to client");
-            /* 
-            // if stored outgoing are available
-            if ret_p.1.is_some() {
-                let list = Some(ret_p.1).unwrap().unwrap();
-                // get the topic
-                for topic in list {
-                    // get the packets
-                    let packets = broker.get_outgoing_packets(&topic).unwrap();
-                    // publish each packet
-                    for packet in packets {
-                        // make it as a packet
-                        let p = Packet::Publish(PublishPacket { 
-                            is_duplicate: packet.is_duplicate, qos: packet.qos, retain: packet.retain, 
-                            topic: packet.topic, packet_id: packet.packet_id, payload_format_indicator: packet.payload_format_indicator, 
-                            message_expiry_interval: packet.message_expiry_interval, topic_alias: packet.topic_alias, 
-                            response_topic: packet.response_topic, correlation_data: packet.correlation_data, 
-                            user_properties: packet.user_properties, subscription_identifier: packet.subscription_identifier, 
-                            content_type: packet.content_type, payload: packet.payload });
-                            let mut pub_buf = BytesMut::new();
-                            assert!(cm_encode(p, &mut pub_buf).is_ok());
-                            socket.send_to(&pub_buf, addr.to_string()).expect("Failed to send to subscriber");
-                        }
-                }
-            }
-            */
         },
         Ok(Packet::Publish(p)) => {
-            // broker.get_sub_list();
-            let res = broker.accept_pub(addr.to_string(), p);
-            // encode the ack packet and the publish packet again
-            let client_list = res.2;
-            let (mut ack_buf, mut pub_buf) = (BytesMut::new(), BytesMut::new());
-            assert!(cm_encode(res.0, &mut ack_buf).is_ok() && cm_encode(res.1, &mut pub_buf).is_ok());
-            // send the ack packet to this client
-            socket.send_to(&ack_buf, addr).expect("Failed to send to client");
-            for cli in client_list {
-                println!("Sending to client...{}", cli);
-                socket.send_to(&pub_buf, cli).expect("Failed to send to subscriber");
-            }
+            println!("\tPublishing...");
+            // thread::spawn(move || {
+                let res = broker.accept_pub(addr.to_string(), p);
+                // encode the ack packet and the publish packet again
+                let client_list = &res.2;
+                let (mut ack_buf, mut pub_buf) = (BytesMut::new(), BytesMut::new());
+                assert!(cm_encode(res.0, &mut ack_buf).is_ok() && cm_encode(res.1, &mut pub_buf).is_ok());
+                // send the ack packet to this client
+                socket.send_to(&ack_buf, addr).expect("Failed to send to client");
+                for cli in client_list {
+                    println!("Sending to client...{}", cli);
+                    socket.send_to(&pub_buf, cli).expect("Failed to send to subscriber");
+                }
+            // }).join().unwrap();
+            
         },
         
         _ => panic!("Incorrect type returned"),
@@ -112,39 +81,6 @@ fn main() -> io::Result<()>{
         }
     }
 
-    /* 
-    let broker = MBroker::new();
-    // let args: Vec<String> = env::args().collect(); // 0.0.0.0:8888, 127.0.0.1:7878, 127.0.0.1:8888
-    // Enable port 7878 binding
-    let receiver_listener = TcpListener::bind("127.0.0.1:7878").expect("Failed and bind with the sender");
-    /* 
-    // Getting a handle of the underlying thread.
-    // let mut thread_vec: Vec<thread::JoinHandle<()>> = Vec::new();
-    // listen to incoming connections messages and bind them to a sever socket address.
-    */
-    for stream in receiver_listener.incoming() {
-        let stream = stream.expect("failed");
-        handle_sender(stream, "127.0.0.1:7878", broker.clone()).unwrap_or_else(|error| eprintln!("{:?}",error))
-        /* 
-        // let the receiver connect with the sender
-        // let handle = thread::spawn(move || {
-            //receiver failed to read from the stream
-            handle sender call
-        // });
-        
-        // Push messages in the order they are sent
-        // thread_vec.push(handle);
-        */
-    }
-
-    /* 
-    // for handle in thread_vec {
-    //     // return each single value Output contained in the heap
-    //     handle.join().unwrap();
-    // }
-    // success value
-    */
-    */
 }
 
 
