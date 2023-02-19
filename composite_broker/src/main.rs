@@ -3,52 +3,48 @@ mod msg_parser;
 use std::{io}; // , time  borrow::Borrow
 use crate::broker::broker::MBroker;
 use bytes::BytesMut;
-use mqtt_v5::{types::{Packet}, }; // PublishPacket topic::TopicFilter
-use msg_parser::msg_parser::cm_encode;
 use std ::net::{UdpSocket, SocketAddr};
 // use std::io::{Read,Write};
 // use std::thread;
-use crate::msg_parser::msg_parser::{cm_decode};
+use mqtt_sn::{self, Message}; // Register, Connect, ClientId, Flags
+use byte::{BytesExt}; // check_len, TryRead, TryWrite
 
 fn handle_packets (broker: &mut MBroker, socket: &UdpSocket, buffer: &[u8;255], addr: SocketAddr) -> MBroker {
     println!("\tPacket being handled");
     if buffer.is_empty() {
         return broker.clone();
     }
-    let decode = cm_decode(buffer);
+    let decode : Message = buffer.read(&mut 0).unwrap();
     match decode {
-        Ok(Packet::Connect(p)) => {
+        Message::Connect(p) => {
             println!("\tConnecting...");
-            let ret_p = broker.accept_connect(addr.to_string(), p);
+            let ret_p = broker.accept_connect(addr.to_string(), p);  // returns ack
             let mut ret_buf = BytesMut::new();      // will contain encoded bytes
-            assert!(cm_encode(ret_p, &mut ret_buf).is_ok());
+            ret_buf.write(&mut 0, ret_p).expect("Didn't write to buffer");// write to the buffer
             socket.send_to(&ret_buf.as_mut(), addr).expect("Failed to send a response");
         },
-        Ok(Packet::Subscribe(p)) => {
+        Message::Subscribe(p) => {
             println!("\tSubscribing...");
             let ret_p = broker.accept_sub(addr.to_string(), p);
-            let mut ret_buf = BytesMut::new();
-            assert!(cm_encode(ret_p, &mut ret_buf).is_ok());
+            let mut ret_buf = BytesMut::new();      // will contain encoded bytes
+            ret_buf.write(&mut 0, ret_p).expect("Didn't write to buffer"); // write to the buffer    
             socket.send_to(&ret_buf.as_mut(), addr).expect("Failed to send to client");
         },
-        Ok(Packet::Publish(p)) => {
+        Message::Publish(p) => {
             println!("\tPublishing...");
-            // thread::spawn(move || {
                 let res = broker.accept_pub(addr.to_string(), p);
                 // encode the ack packet and the publish packet again
                 let client_list = &res.2;
                 let (mut ack_buf, mut pub_buf) = (BytesMut::new(), BytesMut::new());
-                assert!(cm_encode(res.0, &mut ack_buf).is_ok() && cm_encode(res.1, &mut pub_buf).is_ok());
+                ack_buf.write(&mut 0, res.0).expect("Didn't write to buffer"); 
+                pub_buf.write(&mut 0, res.1).expect("Didn't write to buffer");
                 // send the ack packet to this client
                 socket.send_to(&ack_buf, addr).expect("Failed to send to client");
                 for cli in client_list {
                     println!("Sending to client...{}", cli);
                     socket.send_to(&pub_buf, cli).expect("Failed to send to subscriber");
                 }
-            // }).join().unwrap();
-            
         },
-        
         _ => panic!("Incorrect type returned"),
     };
     broker.clone()
@@ -90,119 +86,71 @@ mod tests {
     use core::panic;
 
     use crate::broker::broker::MBroker;
-    use mqtt_v5::{types::{Packet, PublishPacket, SubscribePacket, ConnectPacket, ConnectReason, QoS,
-        ProtocolVersion, RetainHandling, SubscribeAckReason, PublishAckReason, SubscriptionTopic}, 
-        topic::{TopicFilter, Topic}};
-    use bytes::{Bytes, BytesMut};
-    use crate::msg_parser::msg_parser::{cm_decode, cm_encode};
+    use mqtt_sn::{Connect, Flags, ClientId, Message, ReturnCode, RejectedReason, Subscribe, TopicName, Publish, PublishData};
+    use byte::{BytesExt}; // TryWrite
     
     static ADDR: &str = "127.0.0.1:7878"; 
     static ADDR2: &str = "192.0.0.1:7777";
 
     #[test]
     fn test_read_publish_packet() {
-        // Create a Publish packet
-        let packet2 = Packet::Publish(PublishPacket {
-            is_duplicate: false,
-            qos: QoS::AtLeastOnce,
-            retain: true,
-            topic: "gwu".parse().unwrap(),
-            user_properties: Vec::new(),
-            payload: Bytes::from("this is gwu"), // immutable to preserve security,
-            packet_id: Some(42),                 // required
-            payload_format_indicator: None,
-            message_expiry_interval: None,
-            topic_alias: None,
-            response_topic: None,
-            correlation_data: None,
-            subscription_identifier: None,
-            content_type: None,
+        let mut bytes = [0u8; 20];
+        let mut len = 0usize;
+        let connect_packet = Message::Publish(Publish { 
+            flags: Flags::default(), 
+            topic_id: 30, 
+            msg_id: 01, 
+            data: PublishData::from("George") 
         });
-
-        // create the buffer for encoding
-        let mut buf2 = BytesMut::new();
-        let res2 = cm_encode(packet2, &mut buf2);
-
-        assert!(res2.is_ok());
-
-        // decode publish packet
-        let decode2 = cm_decode(&mut buf2);
-
-        match decode2 {
-            Ok(Packet::Publish(p)) => println!("\tPublish packet received {:?}", p.packet_id),
-            _ => panic!("Incorrect type returned"),
-        };
+        // connect_packet.try_write(&mut bytes, ()).expect("Couldn't write");
+        bytes.write(&mut len, connect_packet.clone()).unwrap();
+        let decode : Message =bytes.read(&mut 0).unwrap();
+        assert_eq!(connect_packet, decode);
+        match decode {
+            Message::Connect(m) => {
+                println!("{:?}", m.client_id)
+            }
+            _ =>{}
+        }
     }
 
     #[test]
     fn test_read_connect_packet() {
-        // Create a Connect packet
-        let packet = Packet::Connect(ConnectPacket {
-            protocol_name: String::from("cm_mqtt"),
-            protocol_version: ProtocolVersion::V500,
-            clean_start: true,
-            keep_alive: 1,
-            user_properties: Vec::new(),
-            client_id: String::from("1004"),
-            session_expiry_interval: None,
-            receive_maximum: None,
-            maximum_packet_size: None,
-            topic_alias_maximum: None,
-            request_response_information: None,
-            request_problem_information: None,
-            authentication_method: None,
-            authentication_data: None,
-            will: None,
-            user_name: None,
-            password: None,
+        let mut bytes = [0u8; 20];
+        let mut len = 0usize;
+        let connect_packet = Message::Connect(Connect{
+            flags: Flags::default(),
+            duration: 30,
+            client_id: ClientId::from("hey")
         });
-        // let packet = types::Packet::Connect(conn_p);
-
-        // create buffer for encoding
-        let mut buf = BytesMut::new();
-        let res = cm_encode(packet, &mut buf);
-        assert!(res.is_ok());
-
-        // decode the connect packet
-        let decode = cm_decode(&mut buf);
-
-        assert!(decode.is_ok());
+        // connect_packet.try_write(&mut bytes, ()).expect("Couldn't write");
+        bytes.write(&mut len, connect_packet.clone()).unwrap();
+        let decode : Message =bytes.read(&mut 0).unwrap();
+        assert_eq!(connect_packet, decode);
         match decode {
-            Ok(Packet::Connect(p)) => println!("\tConnect packet received {}", p.client_id),
-            _ => panic!("Incorrect type returned"),
-        };
+            Message::Connect(m) => {
+                println!("{:?}", m.client_id)
+            }
+            _ =>{}
+        }
     }
     
     #[test]
     fn test_new_client1() {
         let mut broker = MBroker::new();
-        let id = "1004".to_string();
+        let id = "1004";
         // Create a Connect packet
-        let conn_p = ConnectPacket {
-            protocol_name: String::from("cm_mqtt"),
-            protocol_version: ProtocolVersion::V500,
-            clean_start: true,
-            keep_alive: 1,
-            user_properties: Vec::new(),
-            client_id: id,
-            session_expiry_interval: None,
-            receive_maximum: None,
-            maximum_packet_size: None,
-            topic_alias_maximum: None,
-            request_response_information: None,
-            request_problem_information: None,
-            authentication_method: None,
-            authentication_data: None,
-            will: None,
-            user_name: None,
-            password: None,
+        let conn_p = Connect {
+            flags: Flags::default(),
+            duration: 30,
+            client_id: ClientId::from(id)
         };
     
         let res = broker.accept_connect(ADDR.to_string(), conn_p);
-        broker.get_client_list();
+        // broker.get_client_list();
         match res {
-            Packet::ConnectAck(p) => {
-                assert_eq!(p.reason_code, ConnectReason::Success);
+            Message::ConnAck(p) => {
+                assert_eq!(p.code, ReturnCode::Accepted);
             },
             _=> {}
         }
@@ -213,59 +161,31 @@ mod tests {
     fn test_new_client2() {
         let mut broker = MBroker::new();
         // Create two Connect packet
-        let conn_p1 = ConnectPacket {
-            protocol_name: String::from("cm_mqtt"),
-            protocol_version: ProtocolVersion::V500,
-            clean_start: true,
-            keep_alive: 1,
-            user_properties: Vec::new(),
-            client_id: "1004".to_string(),
-            session_expiry_interval: None,
-            receive_maximum: None,
-            maximum_packet_size: None,
-            topic_alias_maximum: None,
-            request_response_information: None,
-            request_problem_information: None,
-            authentication_method: None,
-            authentication_data: None,
-            will: None,
-            user_name: None,
-            password: None,
+        let conn_p1 = Connect {
+            flags: Flags::default(),
+            duration: 30,
+            client_id: ClientId::from("1004")
         };
 
-        let conn_p2 = ConnectPacket {
-            protocol_name: String::from("cm_mqtt"),
-            protocol_version: ProtocolVersion::V500,
-            clean_start: true,
-            keep_alive: 1,
-            user_properties: Vec::new(),
-            client_id: "1005".to_string(),
-            session_expiry_interval: None,
-            receive_maximum: None,
-            maximum_packet_size: None,
-            topic_alias_maximum: None,
-            request_response_information: None,
-            request_problem_information: None,
-            authentication_method: None,
-            authentication_data: None,
-            will: None,
-            user_name: None,
-            password: None,
+        let conn_p2 = Connect {
+            flags: Flags::default(),
+            duration: 30,
+            client_id: ClientId::from("1005")
         };
 
         let r1 = broker.accept_connect(ADDR.to_string(), conn_p1);
         let r2 = broker.accept_connect(ADDR.to_string(), conn_p2);
-        broker.get_client_list();
+        // broker.get_client_list();
         match r1 {
-            Packet::ConnectAck(p) => {
-                assert_eq!(p.reason_code, ConnectReason::Success);
+            Message::ConnAck(p) => {
+                assert_eq!(p.code, ReturnCode::Accepted);
             },
             _=> {}
         }
 
         match r2 {
-            Packet::ConnectAck(p) => {
-                assert_eq!(p.reason_code, ConnectReason::Success);
+            Message::ConnAck(p) => {
+                assert_eq!(p.code, ReturnCode::Rejected(RejectedReason::Congestion));
             },
             _=> {}
         }
@@ -273,51 +193,112 @@ mod tests {
 
     
     #[test]
-    fn test_new_sub() {
+    fn test_new_sub_id() {
         let mut broker = MBroker::new();
-        let id = "1004".to_string();
+        let id = "1004";
         // Create a Connect packet
-        let conn_p = ConnectPacket {
-            protocol_name: String::from("cm_mqtt"),
-            protocol_version: ProtocolVersion::V500,
-            clean_start: true,
-            keep_alive: 1,
-            user_properties: Vec::new(),
-            client_id: id,
-            session_expiry_interval: None,
-            receive_maximum: None,
-            maximum_packet_size: None,
-            topic_alias_maximum: None,
-            request_response_information: None,
-            request_problem_information: None,
-            authentication_method: None,
-            authentication_data: None,
-            will: None,
-            user_name: None,
-            password: None,
+        let conn_p = Connect {
+            flags: Flags::default(),
+            duration: 30,
+            client_id: ClientId::from(id)
         };
     
         broker.accept_connect(ADDR.to_string(), conn_p);
         
         // create a subscribe packet
-        let sub_p = SubscribePacket {
-            packet_id: 01,
-            subscription_identifier: None,
-            user_properties: Vec::new(),
-            subscription_topics: vec![SubscriptionTopic {
-                topic_filter: TopicFilter::Concrete { filter: "gwu".to_string(), level_count: 1 },
-                maximum_qos: QoS::AtLeastOnce,
-                no_local: false,
-                retain_as_published: false,
-                retain_handling: RetainHandling::SendAtSubscribeTime,
-            }],
+        let sub_p = Subscribe {
+            flags: Flags::default(),
+            msg_id: 01,
+            topic: mqtt_sn::TopicNameOrId::Id(01)
         };
 
         let res = broker.accept_sub(ADDR.to_string(), sub_p);
-        broker.get_sub_list();
+        // broker.get_sub_list();
         match res {
-            Packet::SubscribeAck(p) => {
-                assert_eq!(p.reason_codes.contains(&Some(SubscribeAckReason::GrantedQoSZero).unwrap()), true);
+            Message::SubAck(p) => {
+                assert_eq!(p.code, ReturnCode::Accepted);
+            },
+            _ => {
+                panic!("Error: didn't receive ack packet");
+            } 
+        }
+        
+    }
+
+    #[test]
+    fn test_new_sub_name() {
+        let mut broker = MBroker::new();
+        let id = "1004";
+        // Create a Connect packet
+        let conn_p = Connect {
+            flags: Flags::default(),
+            duration: 30,
+            client_id: ClientId::from(id)
+        };
+    
+        broker.accept_connect(ADDR.to_string(), conn_p);
+        
+        // create a subscribe packet
+        let sub_p = Subscribe {
+            flags: Flags::default(),
+            msg_id: 01,
+            topic: mqtt_sn::TopicNameOrId::Name(TopicName::from("01"))
+        };
+
+        let res = broker.accept_sub(ADDR.to_string(), sub_p);
+        // broker.get_sub_list();
+        match res {
+            Message::SubAck(p) => {
+                assert_eq!(p.code, ReturnCode::Accepted);
+            },
+            _ => {
+                panic!("Error: didn't receive ack packet");
+            } 
+        }
+        
+    }
+
+    #[test]
+    fn test_multiple_subs_names_ids() {
+        let mut broker = MBroker::new();
+        let id = "1004";
+        // Create a Connect packet
+        let conn_p = Connect {
+            flags: Flags::default(),
+            duration: 30,
+            client_id: ClientId::from(id)
+        };
+    
+        broker.accept_connect(ADDR.to_string(), conn_p);
+        
+        // create a subscribe packet
+        let sub_p1 = Subscribe {
+            flags: Flags::default(),
+            msg_id: 01,
+            topic: mqtt_sn::TopicNameOrId::Name(TopicName::from("01"))
+        };
+        let sub_p2 = Subscribe {
+            flags: Flags::default(),
+            msg_id: 01,
+            topic: mqtt_sn::TopicNameOrId::Id(01)
+        };
+
+        let res1 = broker.accept_sub(ADDR.to_string(), sub_p1);
+        let res2 = broker.accept_sub(ADDR.to_string(), sub_p2);
+        // broker.get_sub_list();
+        match res1 {
+            Message::SubAck(p) => {
+                println!("Sub for \"01\" Topic id: {}", p.topic_id);
+                assert_eq!(p.code, ReturnCode::Accepted);
+            },
+            _ => {
+                panic!("Error: didn't receive ack packet");
+            } 
+        }
+        match res2 {
+            Message::SubAck(p) => {
+                println!("Sub for 01 Topic id: {}", p.topic_id);
+                assert_eq!(p.code, ReturnCode::Accepted);
             },
             _ => {
                 panic!("Error: didn't receive ack packet");
@@ -330,74 +311,38 @@ mod tests {
     fn test_multiple_subs_gwu() {
         let mut broker = MBroker::new();
         // connect
-        let id = "1004".to_string();
+        let id = "1004";
         // Create a Connect packet
-        let conn_p = ConnectPacket {
-            protocol_name: String::from("cm_mqtt"),
-            protocol_version: ProtocolVersion::V500,
-            clean_start: true,
-            keep_alive: 1,
-            user_properties: Vec::new(),
-            client_id: id,
-            session_expiry_interval: None,
-            receive_maximum: None,
-            maximum_packet_size: None,
-            topic_alias_maximum: None,
-            request_response_information: None,
-            request_problem_information: None,
-            authentication_method: None,
-            authentication_data: None,
-            will: None,
-            user_name: None,
-            password: None,
+        let conn_p = Connect {
+            flags: Flags::default(),
+            duration: 30,
+            client_id: ClientId::from(id)
         };
     
         broker.accept_connect(ADDR.to_string(), conn_p);
 
         // create subscribe packets
-        let sub_p1 = SubscribePacket {
-            packet_id: 01,
-            subscription_identifier: None,
-            user_properties: Vec::new(),
-            subscription_topics: vec![SubscriptionTopic {
-                topic_filter: TopicFilter::Concrete { filter: "seas".to_string(), level_count: 1 },
-                maximum_qos: QoS::AtLeastOnce,
-                no_local: false,
-                retain_as_published: false,
-                retain_handling: RetainHandling::SendAtSubscribeTime,
-            }],
+        let sub_p1 = Subscribe {
+            flags: Flags::default(),
+            msg_id: 01,
+            topic: mqtt_sn::TopicNameOrId::Name(TopicName::from("seas"))
         };
-
-        let sub_p2 = SubscribePacket {
-            packet_id: 02,
-            subscription_identifier: None,
-            user_properties: Vec::new(),
-            subscription_topics: vec![SubscriptionTopic {
-                topic_filter: TopicFilter::Concrete { filter: "ccas".to_string(), level_count: 1 },
-                maximum_qos: QoS::AtLeastOnce,
-                no_local: false,
-                retain_as_published: false,
-                retain_handling: RetainHandling::SendAtSubscribeTime,
-            }],
+        let sub_p2 = Subscribe {
+            flags: Flags::default(),
+            msg_id: 02,
+            topic: mqtt_sn::TopicNameOrId::Name(TopicName::from("ccas"))
         };
-
-        let sub_p3 = SubscribePacket {
-            packet_id: 03,
-            subscription_identifier: None,
-            user_properties: Vec::new(),
-            subscription_topics: vec![SubscriptionTopic {
-                topic_filter: TopicFilter::Concrete { filter: "elliot".to_string(), level_count: 1 },
-                maximum_qos: QoS::AtLeastOnce,
-                no_local: false,
-                retain_as_published: false,
-                retain_handling: RetainHandling::SendAtSubscribeTime,
-            }],
+        let sub_p3 = Subscribe {
+            flags: Flags::default(),
+            msg_id: 02,
+            topic: mqtt_sn::TopicNameOrId::Name(TopicName::from("elliot"))
         };
 
         let r1 = broker.accept_sub(ADDR.to_string(), sub_p1);
         match r1 {
-            Packet::SubscribeAck(p) => {
-                assert_eq!(p.reason_codes.contains(&Some(SubscribeAckReason::GrantedQoSZero).unwrap()), true);
+            Message::SubAck(p) => {
+                println!("Sub for seas Topic id: {}", p.topic_id);
+                assert_eq!(p.code, ReturnCode::Accepted);
             }
             _=> {
                 panic!("Error: didn't receive ack packet");
@@ -407,8 +352,9 @@ mod tests {
 
         let r2 = broker.accept_sub(ADDR.to_string(), sub_p2);
         match r2 {
-            Packet::SubscribeAck(p) => {
-                assert_eq!(p.reason_codes.contains(&Some(SubscribeAckReason::GrantedQoSZero).unwrap()), true);
+            Message::SubAck(p) => {
+                println!("Sub for ccas Topic id: {}", p.topic_id);
+                assert_eq!(p.code, ReturnCode::Accepted);
             }
             _=> {
                 panic!("Error: didn't receive ack packet");
@@ -418,86 +364,50 @@ mod tests {
 
         let r3 = broker.accept_sub(ADDR.to_string(), sub_p3);
         match r3 {
-            Packet::SubscribeAck(p) => {
-                assert_eq!(p.reason_codes.contains(&Some(SubscribeAckReason::GrantedQoSZero).unwrap()), true);
+            Message::SubAck(p) => {
+                println!("Sub for elliot Topic id: {}", p.topic_id);
+                assert_eq!(p.code, ReturnCode::Accepted);
             }
             _=> {
                 panic!("Error: didn't receive ack packet");
             }
         }
-        
-        broker.get_sub_list(); 
+        // broker.get_sub_list(); 
     }
   
     #[test]
     fn test_multiple_subs_unis() {
         let mut broker = MBroker::new();
         // Create a Connect packet
-        let conn_p = ConnectPacket {
-            protocol_name: String::from("cm_mqtt"),
-            protocol_version: ProtocolVersion::V500,
-            clean_start: true,
-            keep_alive: 1,
-            user_properties: Vec::new(),
-            client_id: "1004".to_string() ,
-            session_expiry_interval: None,
-            receive_maximum: None,
-            maximum_packet_size: None,
-            topic_alias_maximum: None,
-            request_response_information: None,
-            request_problem_information: None,
-            authentication_method: None,
-            authentication_data: None,
-            will: None,
-            user_name: None,
-            password: None,
+        let conn_p = Connect {
+            flags: Flags::default(),
+            duration: 30,
+            client_id: ClientId::from("1004")
         };
     
         broker.accept_connect(ADDR.to_string(), conn_p);
         // create subscribe packets
-        let sub_p1 = SubscribePacket {
-            packet_id: 01,
-            subscription_identifier: None,
-            user_properties: Vec::new(),
-            subscription_topics: vec![SubscriptionTopic {
-                topic_filter: TopicFilter::Concrete { filter: "gwu".to_string(), level_count: 1 },
-                maximum_qos: QoS::AtLeastOnce,
-                no_local: false,
-                retain_as_published: false,
-                retain_handling: RetainHandling::SendAtSubscribeTime,
-            }],
+        let sub_p1 = Subscribe {
+            flags: Flags::default(),
+            msg_id: 01,
+            topic: mqtt_sn::TopicNameOrId::Name(TopicName::from("gwu"))
         };
-
-        let sub_p2 = SubscribePacket {
-            packet_id: 02,
-            subscription_identifier: None,
-            user_properties: Vec::new(),
-            subscription_topics: vec![SubscriptionTopic {
-                topic_filter: TopicFilter::Concrete { filter: "udel".to_string(), level_count: 1 },
-                maximum_qos: QoS::AtLeastOnce,
-                no_local: false,
-                retain_as_published: false,
-                retain_handling: RetainHandling::SendAtSubscribeTime,
-            }],
+        let sub_p2 = Subscribe {
+            flags: Flags::default(),
+            msg_id: 02,
+            topic: mqtt_sn::TopicNameOrId::Name(TopicName::from("udel"))
         };
-
-        let sub_p3 = SubscribePacket {
-            packet_id: 03,
-            subscription_identifier: None,
-            user_properties: Vec::new(),
-            subscription_topics: vec![SubscriptionTopic {
-                topic_filter: TopicFilter::Concrete { filter: "uwm".to_string(), level_count: 1 },
-                maximum_qos: QoS::AtLeastOnce,
-                no_local: false,
-                retain_as_published: false,
-                retain_handling: RetainHandling::SendAtSubscribeTime,
-            }],
+        let sub_p3 = Subscribe {
+            flags: Flags::default(),
+            msg_id: 03,
+            topic: mqtt_sn::TopicNameOrId::Name(TopicName::from("uwm"))
         };
 
         let r1 = broker.accept_sub(ADDR.to_string(), sub_p1);
         match r1 {
-            Packet::SubscribeAck(p) => {
-                assert_eq!(p.reason_codes.contains(&Some(SubscribeAckReason::GrantedQoSZero).unwrap()), true);
+            Message::SubAck(p) => {
+                println!("Sub for gwu Topic id: {}", p.topic_id);
+                assert_eq!(p.code, ReturnCode::Accepted);
             }
             _=> {
                 panic!("Error: didn't receive ack packet");
@@ -507,8 +417,9 @@ mod tests {
 
         let r2 = broker.accept_sub(ADDR.to_string(), sub_p2);
         match r2 {
-            Packet::SubscribeAck(p) => {
-                assert_eq!(p.reason_codes.contains(&Some(SubscribeAckReason::GrantedQoSZero).unwrap()), true);
+            Message::SubAck(p) => {
+                println!("Sub for udel Topic id: {}", p.topic_id);
+                assert_eq!(p.code, ReturnCode::Accepted);
             }
             _=> {
                 panic!("Error: didn't receive ack packet");
@@ -518,8 +429,9 @@ mod tests {
 
         let r3 = broker.accept_sub(ADDR.to_string(), sub_p3);
         match r3 {
-            Packet::SubscribeAck(p) => {
-                assert_eq!(p.reason_codes.contains(&Some(SubscribeAckReason::GrantedQoSZero).unwrap()), true);
+            Message::SubAck(p) => {
+                println!("Sub for uwm Topic id: {}", p.topic_id);
+                assert_eq!(p.code, ReturnCode::Accepted);
             }
             _=> {
                 panic!("Error: didn't receive ack packet");
@@ -531,53 +443,38 @@ mod tests {
     #[test]
     fn test_new_pub() {
         let mut broker = MBroker::new();
-        let id = "1004".to_string();
         // Create a client's connect packet
-        let conn_p1 = ConnectPacket {
-            protocol_name: String::from("cm_mqtt"),
-            protocol_version: ProtocolVersion::V500,
-            clean_start: true,
-            keep_alive: 1,
-            user_properties: Vec::new(),
-            client_id: id,
-            session_expiry_interval: None,receive_maximum: None, maximum_packet_size: None,
-            topic_alias_maximum: None,request_response_information: None, request_problem_information: None,
-            authentication_method: None, authentication_data: None, will: None,user_name: None,password: None,
+        let conn_p = Connect {
+            flags: Flags::default(),
+            duration: 30,
+            client_id: ClientId::from("1004")
         };
-        broker.accept_connect(ADDR.to_string(), conn_p1);
+        broker.accept_connect(ADDR.to_string(), conn_p);
 
         // create a subscribe packet
-        let sub_p = SubscribePacket {
-            packet_id: 01,
-            subscription_identifier: None,
-            user_properties: Vec::new(),
-            subscription_topics: vec![SubscriptionTopic {
-                topic_filter: TopicFilter::Concrete { filter: "gwu".to_string(), level_count: 1 },
-                maximum_qos: QoS::AtMostOnce,
-                no_local: false,
-                retain_as_published: false,
-                retain_handling: RetainHandling::SendAtSubscribeTime,
-            }],
+        let sub_p = Subscribe {
+            flags: Flags::default(),
+            msg_id: 01,
+            topic: mqtt_sn::TopicNameOrId::Name(TopicName::from("gwu"))
         };
-        broker.accept_sub(ADDR.to_string(), sub_p);
+        let sub_ret = broker.accept_sub(ADDR.to_string(), sub_p);
+        let topic = match sub_ret {
+            Message::SubAck(p) => p.topic_id,
+            _ => 0
+        };
 
         // create publish packet
-        let pub_p = PublishPacket {
-            is_duplicate: false,
-            qos: QoS::AtMostOnce, 
-            retain: false,
-            user_properties: Vec::new(),
-            topic: "gwu".parse::<Topic>().unwrap(),
-            payload: Bytes::from("George Washington University"),
-            packet_id: None, payload_format_indicator: None, message_expiry_interval: None, 
-            topic_alias: None, response_topic: None, content_type: None, correlation_data: None, 
-            subscription_identifier: None
+        let pub_p = Publish {
+            flags: Flags::default(),
+            topic_id: topic,
+            msg_id: 02,
+            data: PublishData::from("George Washington")
         };
 
         let res = broker.accept_pub(ADDR.to_string(), pub_p);
         match res.0 {
-            Packet::PublishAck(p) => {
-                assert_eq!(p.reason_code, PublishAckReason::Success);
+            Message::PubAck(p) => {
+                assert_eq!(p.code, ReturnCode::Accepted);
             }
             _=> {
                 panic!("Error: didn't receive ack packet");
@@ -585,8 +482,9 @@ mod tests {
         }
         
         match res.1 {
-            Packet::Publish(p) => {
-                assert_eq!(p.topic, "gwu".parse::<Topic>().unwrap());
+            Message::Publish(p) => {
+                println!("Published data: {:?}", p.data);
+                assert_eq!(p.topic_id, topic);
             }
             _=> {
                 panic!("Error didn't receive ")
@@ -599,65 +497,46 @@ mod tests {
     fn test_new_pub_2clients() {
         let mut broker = MBroker::new();
         // Create a client's connect packet
-        let conn_p1 = ConnectPacket {
-            protocol_name: String::from("cm_mqtt"),
-            protocol_version: ProtocolVersion::V500,
-            clean_start: true,
-            keep_alive: 1,
-            user_properties: Vec::new(),
-            client_id: ADDR.to_string(),
-            session_expiry_interval: None,receive_maximum: None, maximum_packet_size: None,
-            topic_alias_maximum: None,request_response_information: None, request_problem_information: None,
-            authentication_method: None, authentication_data: None, will: None,user_name: None,password: None,
+        let conn_p1 = Connect {
+            flags: Flags::default(),
+            duration: 30,
+            client_id: ClientId::from("1004")
         };
         broker.accept_connect(ADDR.to_string(), conn_p1);
 
         // Create a client's connect packet
-        let conn_p2 = ConnectPacket {
-            protocol_name: String::from("cm_mqtt"),
-            protocol_version: ProtocolVersion::V500,
-            clean_start: true,
-            keep_alive: 1,
-            user_properties: Vec::new(),
-            client_id: ADDR2.to_string(),
-            session_expiry_interval: None,receive_maximum: None, maximum_packet_size: None,
-            topic_alias_maximum: None,request_response_information: None, request_problem_information: None,
-            authentication_method: None, authentication_data: None, will: None,user_name: None,password: None,
+        let conn_p2 = Connect {
+            flags: Flags::default(),
+            duration: 30,
+            client_id: ClientId::from("1005")
         };
         broker.accept_connect(ADDR2.to_string(), conn_p2);
 
         // create a subscribe packet
-        let sub_p = SubscribePacket {
-            packet_id: 01,
-            subscription_identifier: None,
-            user_properties: Vec::new(),
-            subscription_topics: vec![SubscriptionTopic {
-                topic_filter: TopicFilter::Concrete { filter: "gwu".to_string(), level_count: 1 },
-                maximum_qos: QoS::AtMostOnce,
-                no_local: false,
-                retain_as_published: false,
-                retain_handling: RetainHandling::SendAtSubscribeTime,
-            }],
+        let sub_p = Subscribe {
+            flags: Flags::default(),
+            msg_id: 01,
+            topic: mqtt_sn::TopicNameOrId::Name(TopicName::from("gwu"))
         };
-        broker.accept_sub(ADDR.to_string(), sub_p);
+        let sub_ret = broker.accept_sub(ADDR.to_string(), sub_p);
+        let topic = match sub_ret {
+            Message::SubAck(p) => p.topic_id,
+            _ => 0
+        };
 
         // create publish packet
-        let pub_p = PublishPacket {
-            is_duplicate: false,
-            qos: QoS::AtMostOnce, 
-            retain: false,
-            user_properties: Vec::new(),
-            topic: "gwu".parse::<Topic>().unwrap(),
-            payload: Bytes::from("George Washington University"),
-            packet_id: None, payload_format_indicator: None, message_expiry_interval: None, 
-            topic_alias: None, response_topic: None, content_type: None, correlation_data: None, 
-            subscription_identifier: None
+        let pub_p = Publish {
+            flags: Flags::default(),
+            topic_id: topic,
+            msg_id: 02,
+            data: PublishData::from("George Washington University")
         };
+
 
         let res = broker.accept_pub(ADDR2.to_string(), pub_p);
         match res.0 {
-            Packet::PublishAck(p) => {
-                assert_eq!(p.reason_code, PublishAckReason::Success);
+            Message::PubAck(p) => {
+                assert_eq!(p.code, ReturnCode::Accepted);
             }
             _=> {
                 panic!("Error: didn't receive ack packet");
@@ -665,8 +544,9 @@ mod tests {
         }
 
         match res.1 {
-            Packet::Publish(p) => {
-                assert_eq!(p.topic, "gwu".parse::<Topic>().unwrap());
+            Message::Publish(p) => {
+                println!("Published data: {:?}", p.data);
+                assert_eq!(p.topic_id, topic);
             }
             _=> {
                 panic!("Error: publish packet not returned")
