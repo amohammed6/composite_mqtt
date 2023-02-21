@@ -21,6 +21,7 @@ pub mod msg_parser {
     // Decode function
     //  input: bytes of encoded packet
     //  output: packet
+    #[allow(dead_code)]
     pub fn cm_decode(buffer: & [u8]) -> Result<mqtt_v5::types::Packet, String> {
         let mut b = BytesMut::from(buffer);
         if buffer.is_empty() {

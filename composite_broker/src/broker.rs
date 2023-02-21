@@ -6,7 +6,7 @@ pub mod broker {
     //     properties::ReasonString, PublishPacket, PublishAckPacket, PublishAckReason, Packet, self
     // }};
     use mqtt_sn::{self, Message, Connect, ConnAck, ReturnCode, RejectedReason, Subscribe, SubAck, 
-        Flags, Publish, PubAck}; // TopicName
+        Flags, Publish, PubAck, UnsubAck, Unsubscribe}; // TopicName
 
     
     #[derive(Debug, Clone, PartialEq)]
@@ -31,7 +31,7 @@ pub mod broker {
         num_topics: u16,
         client_list: Vec<Client>,
         concrete_subscriptions_list: HashMap<u16, Vec<Client>>,
-        topic_name_arr: Vec<String>,
+        topicname_id_pairs: HashMap<String, u16>,
     } 
 
     #[allow(dead_code)]
@@ -44,15 +44,15 @@ pub mod broker {
                 num_clients: 0,
                 num_topics: 0,
                 client_list: Vec::new(), 
-                concrete_subscriptions_list: HashMap::new(),
-                topic_name_arr: Vec::new()
+                concrete_subscriptions_list: HashMap::new(), //DashMap::new(),
+                topicname_id_pairs: HashMap::new()
             }
         } // end new
 
         // accept a connect packet
         // param: address of the client, connect packet
         // return: connect ack
-        pub fn accept_connect(&mut self, addr: String, connect_packet: Connect) -> Message {
+        pub fn accept_connect(&mut self, addr: String, _connect_packet: Connect) -> Message {
             let addr_port: Vec<&str> = addr.split(":").collect();
             // error checking that client isn't already connected
             if self.find_client_by_address(addr_port[0], addr_port[1]) {
@@ -78,10 +78,10 @@ pub mod broker {
 
 
         // accept a subscribe packet -> (Packet, Option<Vec<String>>)
+        #[allow(unused_assignments)]
         pub fn accept_sub(&mut self, addr: String, packet: Subscribe) -> Message {
+            self.num_packets +=1;
             let addr_port: Vec<&str> = addr.split(":").collect();
-            // let mut stored_packet = false;
-            // let mut outgoing_topics: Vec<String> = Vec::new();
             let mut cli: Client = Client::new(String::new(), String::new(), String::new());
             // find the client in reference
             for client in self.client_list.clone() {
@@ -105,25 +105,27 @@ pub mod broker {
                 
                 return sub_ack;
             }
-            self.num_packets +=1;
 
             // check if topic is in list
             let mut topic = 0;
             match packet.topic {
                 mqtt_sn::TopicNameOrId::Id(id) => {
+                    // println!("Found id: {}", id);
                     topic = id
                 },
-                mqtt_sn::TopicNameOrId::Name(_) => {
+                mqtt_sn::TopicNameOrId::Name(name) => {
                     // generate a random number that is not a key in the list already
+                    // println!("Topic is : {}", name.to_string());
                     let mut rng = rand::thread_rng();
-                    let mut n2: u16 = 0;
+                    let mut n2: u16 = rng.gen_range(0..999);
                     while self.concrete_subscriptions_list.contains_key(&n2) {
                         n2 = rng.gen()
                     }
+                    // add it to the pairs list
+                    self.topicname_id_pairs.insert(name.clone().to_string(), n2.clone());
                     topic = n2.clone()
                 }
             };
-            
             match self.concrete_subscriptions_list.get_mut(&topic) {
                 Some(entry) => {
                     entry.push(Client { client_id: cli.client_id.clone(), address: addr_port[0].to_string(), port: addr_port[1].to_string()});
@@ -132,35 +134,6 @@ pub mod broker {
                     self.concrete_subscriptions_list.insert(topic, vec![Client { client_id: cli.client_id.clone(), address: addr_port[0].to_string(), port: addr_port[1].to_string() }]);
                 }
             }
-            /* 
-            // for topic in &packet.subscription_topics {
-            //     // check if the topic exists
-            //     match &topic.topic_filter {
-            //         TopicFilter::Concrete { filter, level_count:_ } =>
-            //         {
-            //             // add to the subscription list
-            //             match self.concrete_subscriptions_list.get_mut(filter) {
-            //                 Some(entry) => {
-            //                     // if the topic is already in the list, add the client
-            //                     entry.push(Client { client_id: cli.client_id.clone(), address: addr_port[0].to_string(), port: addr_port[1].to_string()});
-            //                 },
-            //                 None => {
-            //                     self.concrete_subscriptions_list.insert(filter.to_string(), vec![Client { client_id: cli.client_id.clone(), address: addr_port[0].to_string(), port: addr_port[1].to_string() }]);
-            //                 }
-            //             }
-            //         }
-            //         _=> {   // other filter types aren't accepted
-            //             println!("\nOther filter entered");
-            //             return Packet::SubscribeAck(SubscribeAckPacket{ 
-            //                 packet_id:packet.packet_id.clone(),
-            //                 reason_codes: vec![SubscribeAckReason::NotAuthorized],
-            //                 reason_string: Some(ReasonString("TopicFilter is not recognized by Broker".to_string())),
-            //                 user_properties: Vec::new() 
-            //             });
-            //         }
-            //     };
-            // }
-            */
             Message::SubAck(SubAck { 
                 flags: Flags::default(), 
                 msg_id: self.num_packets, 
@@ -171,6 +144,7 @@ pub mod broker {
 
         // return the client address (String) and the publish ack packet
         pub fn accept_pub(&mut self, addr: String, packet: Publish) -> (Message, Message, Vec<String>) {
+            self.num_packets +=1;
             let addr_port: Vec<&str> = addr.split(":").collect();
             let pub_p = Message::Publish(Publish { 
                 ..packet.clone()
@@ -180,12 +154,11 @@ pub mod broker {
                 println!("Address not in broker");
                 let ack = Message::PubAck(PubAck { 
                     topic_id: packet.topic_id, 
-                    msg_id: self.num_packets +1, 
+                    msg_id: self.num_packets, 
                     code: ReturnCode::Rejected(RejectedReason::NotSupported) 
                 });
                 return (ack, pub_p, Vec::new())
             }
-            self.num_packets +=1;
 
             // create return variables
             let mut ret_clients : Vec<String> = Vec::new();
@@ -212,7 +185,7 @@ pub mod broker {
             if found {
                 let ack = Message::PubAck(PubAck { 
                     topic_id: packet.topic_id, 
-                    msg_id: self.num_packets +1, 
+                    msg_id: self.num_packets, 
                     code: ReturnCode::Accepted 
                 });
                 
@@ -221,12 +194,70 @@ pub mod broker {
             else {
                 let ack = Message::PubAck(PubAck { 
                     topic_id: packet.topic_id, 
-                    msg_id: self.num_packets +1, 
+                    msg_id: self.num_packets, 
                     code: ReturnCode::Rejected(RejectedReason::InvalidTopicId) 
                 }); 
                 return (ack, pub_p, ret_clients);
             }
         } // end publish
+
+        pub fn accept_unsub(&mut self, addr: String, packet: Unsubscribe) -> Message {
+            self.num_packets +=1;
+            let addr_port: Vec<&str> = addr.split(":").collect();
+            // find the topic
+            let topic =  match &packet.topic {
+                mqtt_sn::TopicNameOrId::Id(id) => id,
+                mqtt_sn::TopicNameOrId::Name(name) => {
+                    // find it in the topic pairs
+                    self.topicname_id_pairs.get(&name.as_str().to_string()).unwrap()
+                }
+            };
+            let top = self.concrete_subscriptions_list.get_mut(topic);
+
+            match top {
+                Some(list) => {
+                    // let list = entry.value_mut();
+                    let mut removed: Client = Client { client_id: "0".to_string(), address: "0".to_string(), port: "0".to_string()};
+                    // find the client in the topic list
+                    let mut i = 0;
+                    for client in list.iter_mut() {
+                        if client.address == addr_port[0] && client.port == addr_port[1] {
+                            removed = list.remove(i);
+                            break;
+                        }
+                        i+=1;
+                    }
+                    // check if you found the client in the topic list
+                    if removed.client_id == "0".to_string() {
+                        return 
+                        Message::UnsubAck(UnsubAck { 
+                            msg_id: self.num_packets,
+                            code: ReturnCode::Rejected(RejectedReason::InvalidTopicId)
+                        })
+                    }
+                    else {
+                        // if it's the last one, remove the topic
+                        if list.len() == 0 {
+                            println!("Trying to remove");
+                            let it = self.concrete_subscriptions_list.remove(topic).unwrap();
+                            println!("List is 0 , {:?}", it);
+                        }
+                    }
+                },
+                None => {
+                    return 
+                    Message::UnsubAck(UnsubAck { 
+                        msg_id: self.num_packets,
+                        code: ReturnCode::Rejected(RejectedReason::InvalidTopicId)
+                    })
+                }
+            }
+
+            Message::UnsubAck(UnsubAck { 
+                msg_id: self.num_packets,
+                code: ReturnCode::Accepted
+            })
+        }
 
         /*
             HELPER FUNCTION
@@ -253,15 +284,15 @@ pub mod broker {
             false
         }
 
-        fn does_topic_exist(&mut self, topic: u16) -> bool {
-            for (k, _v) in &self.concrete_subscriptions_list {
-                if k.eq(&topic) { 
-                    println!("found");
-                    return true;
-                }
-            }
-            println!("nope");
-            false
-        }
+        // fn does_topic_exist(&mut self, topic: u16) -> bool {
+        //     for (k, _v) in &self.concrete_subscriptions_list {
+        //         if k.eq(&topic) { 
+        //             println!("found");
+        //             return true;
+        //         }
+        //     }
+        //     println!("nope");
+        //     false
+        // }
     }
 }

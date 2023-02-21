@@ -1,108 +1,149 @@
-mod msg_parser;
 use std::{str,env};
-use std::net::{UdpSocket}; // SocketAddr
+use std::io::{self};  
+use byte::{BytesExt}; // TryWrite
 use std::borrow::Borrow;
-use std::io::{self};  // ,Write, prelude::*,BufReader
-use mqtt_v5::{encoder, types::{Packet, ConnectPacket, PublishPacket, SubscribePacket, SubscriptionTopic, QoS, 
-    RetainHandling, ProtocolVersion}, topic::{TopicFilter, Topic}}; // decoder
-use bytes::{Bytes, BytesMut};
-use crate::msg_parser::msg_parser::{cm_decode};
+use std::net::{UdpSocket}; // SocketAddr
+use mqtt_sn::{Message, Connect, Flags, ClientId, Subscribe, TopicName, Publish, PublishData, TopicNameOrId, 
+    Unsubscribe};
 
-fn send_connect() -> BytesMut {
+fn send_connect(socket: &UdpSocket, addr: String)  { // -> [u8;128]
     // make connect packet
-    let packet = Packet::Connect(ConnectPacket {
-        protocol_name: String::from("cm_mqtt"),
-        protocol_version: ProtocolVersion::V500,
-        clean_start: true,
-        keep_alive: 1,
-        user_properties: Vec::new(),
-        client_id: String::from("1001"),
-        session_expiry_interval: None,
-        receive_maximum: None,
-        maximum_packet_size: None,
-        topic_alias_maximum: None,
-        request_response_information: None,
-        request_problem_information: None,
-        authentication_method: None,
-        authentication_data: None,
-        will: None,
-        user_name: None,
-        password: None,
+    let packet = Message::Connect(Connect {
+        flags: Flags::default(),
+        duration: 30,
+        client_id: ClientId::from("1001")
     });
 
     // encode it
-    let mut buf = BytesMut::new();      // create buffer for encoding
-    encoder::encode_mqtt(&packet, &mut buf, ProtocolVersion::V500);
+    let mut buf = [0u8; 128];      // create buffer for encoding
+    let mut len = 0usize;
+    buf.write(&mut len, packet.clone()).unwrap(); // .expect("Didn't write to buffer");
 
-    // return it
+
+    // send it
     println!("\tSending ConnectPacket for a new client\n");
-    buf
+    socket.send_to(&buf.as_mut(), addr).expect("Couldn't send to broker");
+    // buf
 }
 
-fn send_sub(topic_name: String, packet_num: &u16) -> (u16, BytesMut) {
-    let v: Vec<&str> = topic_name.split(" ").collect();
+fn send_sub(topic_name: String, packet_num: &u16, socket: &UdpSocket, addr: String) -> u16  { // (u16, [u8; 128])
+    let packet : Message;
     let p_num = *packet_num;
-    // make sub packet
-    let packet = Packet::Subscribe(SubscribePacket {
-        packet_id: p_num,
-        subscription_identifier: None,
-        user_properties: Vec::new(),
-        subscription_topics: vec![SubscriptionTopic {
-            topic_filter: TopicFilter::Concrete { 
-                filter: v[1].strip_suffix("\n").expect("Can't strip").parse().unwrap(), 
-                level_count: 1 },
-            maximum_qos: QoS::AtLeastOnce,
-            no_local: false,
-            retain_as_published: false,
-            retain_handling: RetainHandling::SendAtSubscribeTime,
-        }],
-    });
-
+    let topic = topic_name.strip_prefix("sub ").expect("Couldn't strip").strip_suffix("\n").expect("Can't strip");
+    // let topic = v[1]..trim_start();
+    if topic.parse::<u16>().is_err() {
+        // make sub packet
+        println!("Is a string {}", topic);
+        packet = Message::Subscribe(Subscribe {
+            flags: Flags::default(),
+            msg_id: p_num,
+            topic: TopicNameOrId::Name(TopicName::from(topic))
+        });
+    }
+    else {
+        // make sub packet
+        let mut flags = Flags::default();
+        flags.set_topic_id_type(0x2); // topic_id
+        packet = Message::Subscribe(Subscribe {
+            flags,
+            msg_id: p_num,
+            topic: match topic.parse::<u16>() {
+                Ok(num) => {
+                    // is a number
+                    println!("Is a number {}", num);
+                    TopicNameOrId::Id(num as u16)
+                },
+                Err(_n) => {
+                    // is a string
+                    println!("Is a string {}", topic);
+                    TopicNameOrId::Name(topic.into())
+                }
+            }
+        });
+    }
+    
     // encode it
-    let mut buf = BytesMut::new();      // create buffer for encoding 
-    encoder::encode_mqtt(&packet, &mut buf, ProtocolVersion::V500);
+    let mut buf = [0u8; 128];      // create buffer for encoding 
+    let mut len = 0usize;
+    buf.write(&mut len, packet).unwrap();
 
-    // return it
-    println!("\tSending SubscribePacket for topic: {}", v[1]);
-    (p_num + 1, buf)
+    // send it
+    println!("\tSending SubscribePacket for topic: {}", topic);
+    socket.send_to(&buf.as_mut(), addr).expect("Couldn't send to broker");
+    // (p_num + 1, buf)
+    p_num + 1
 }
 
-fn send_pub(args: String, packet_num: &u16) -> (u16, BytesMut) {
+fn send_pub(args: String, packet_num: &u16, socket: &UdpSocket, addr: String) -> u16 { // (u16, [u8; 128])
     let topic_name = args.split(':').collect::<Vec<&str>>()[0];
-    let content: String = args.split(':').collect::<Vec<&str>>()[1].to_string();
+    let content: &str = args.split(':').collect::<Vec<&str>>()[1];
     let p_num = *packet_num;
+    let topic_id: u16 = topic_name.strip_prefix("pub ").expect("Couldn't strip").parse().unwrap();
     // make publish packet
-    let packet = Packet::Publish(PublishPacket {
-        is_duplicate: false,
-        qos: QoS::AtLeastOnce,
-        retain: true,
-        topic: topic_name.clone().split_at(9).1.parse::<Topic>().unwrap(),
-        user_properties: Vec::new(),
-        payload: Bytes::from(content.clone()), // immutable to preserve security,
-        packet_id: Some(*packet_num),                 // required
-        payload_format_indicator: None,
-        message_expiry_interval: None,
-        topic_alias: None,
-        response_topic: None,
-        correlation_data: None,
-        subscription_identifier: None,
-        content_type: None,
+    let packet = Message::Publish(Publish {
+        flags: Flags::default(),
+        topic_id: topic_id,
+        msg_id: p_num,
+        data: PublishData::from(content.strip_suffix("\n").expect("Can't strip"))
     });
 
     // encode it
-    let mut buf = BytesMut::new();      // create buffer for encoding
-    encoder::encode_mqtt(&packet, &mut buf, ProtocolVersion::V500);
+    let mut buf = [0u8; 128];      // create buffer for encoding
+    let mut len = 0usize;
+    buf.write(&mut len, packet).expect("Didn't write to buffer");
 
-    // return it
-    println!("\tSending PublishPacket for topic '{}'", topic_name.clone().split_at(9).1);
-    return (p_num + 1, buf);
+    // send it
+    println!("\tSending PublishPacket for topic '{}'", topic_id);
+    socket.send_to(&buf.as_mut(), addr).expect("Couldn't send to broker");
+    // return (p_num + 1, buf);
+    p_num + 1
+}
+
+fn send_unsub(topic_name: String, packet_num: &u16, socket: &UdpSocket, addr: String) -> u16 {
+    // let v: Vec<&str> = topic_name.split(" ").collect();
+    let p_num = *packet_num;
+    let topic = topic_name.strip_prefix("unsub ").expect("Couldn't strip").strip_suffix("\n").expect("Can't strip");
+
+    // make the unsub packet 
+    let packet = Message::Unsubscribe(Unsubscribe { 
+        flags: match topic.parse::<u16>() {
+            Ok(_) => {
+                let mut flags = Flags::default();
+                flags.set_topic_id_type(0x2); // topic_id
+                flags
+            }
+            Err(_) => {
+                Flags::default()
+            }
+        },
+        msg_id: p_num, 
+        topic: match topic.parse::<u16>() {
+            Ok(num) => {
+                TopicNameOrId::Id(num as u16)
+            }
+            Err(_n) => {
+                TopicNameOrId::Name(topic.into())
+            }
+        }
+    });
+    let mut buf = [0u8; 128];      // create buffer for encoding 
+    let mut len = 0usize;
+    buf.write(&mut len, packet).unwrap();
+
+    // send it
+    println!("\tSending SubscribePacket for topic: {}", topic);
+    socket.send_to(&buf.as_mut(), addr).expect("Couldn't send to broker");
+
+    p_num+1
 }
 
 fn read_publish_packet(buf: [u8; 1500]) {
-    let p = cm_decode(&buf);
+    // decode
+    let p: Message = buf.read(&mut 0).unwrap();
+    // println!("Receiving data");
     match p {
-        Ok(Packet::Publish(p)) => {
-            println!("Received publish packet: {}", String::from_utf8_lossy(&p.payload))
+        Message::Publish(m) => {
+            println!("Received publish packet: {:?}", m.data.as_str())
         },
         _=>{}
     }
@@ -117,10 +158,8 @@ fn read_publish_packet(buf: [u8; 1500]) {
 
 fn main() -> io::Result<()>{
     let mut packet_num = 00;
-    // collect address from command line
-    let args: Vec<String> = env::args().collect();
-    // concatenate to make the socket addr
-    let bind_addr = args[1].clone() + ":"+ args[2].borrow();
+    let args: Vec<String> = env::args().collect();      // collect address from command line
+    let bind_addr = args[1].clone() + ":"+ args[2].borrow();   // concatenate to make the socket addr
 
     // make the socket
     let socket = UdpSocket::bind(bind_addr).expect("Could not bind client socket");
@@ -128,90 +167,72 @@ fn main() -> io::Result<()>{
     loop {
         let mut input = String::new();
         let mut ack_buffer = [0u8; 1500];
-        // let mut pub_buf = [0u8; 1500];
-        let mut ret_buf = BytesMut::new();
+        let sock = socket.try_clone().expect("Failed to clone socket");
 
         // read the input from the command line
         io::stdin().read_line(&mut input).expect("Failed to read from stdin");
-        if input.as_bytes() != "\n".as_bytes() {
-            socket.send_to(input.as_bytes(), args[1].clone() + ":8888").expect("Failed to write to server");
-        }
-        else {continue;}
+        // if input.as_bytes() == "\n".as_bytes() {continue;}
         
         // add logic for calling the functions
-        if input.contains("connect") {
-            ret_buf = send_connect();
+        if !input.is_empty() {
+            if input.contains("connect") {
+                send_connect(&sock, args[1].clone() + ":8888");
+            }
+            else if input.contains("unsub") {
+                packet_num = send_unsub(
+                    input.strip_prefix("mqtt_").expect("Couldn't strip").to_string(), 
+                    &packet_num, 
+                    &sock, 
+                    args[1].clone() + ":8888")
+            }
+            else if input.contains("sub") {
+                packet_num = send_sub(
+                    input.strip_prefix("mqtt_").expect("Couldn't strip").to_string(),
+                    &packet_num, 
+                    &sock, 
+                    args[1].clone() + ":8888");
+            }
+            else if input.contains("pub") {
+                packet_num = send_pub(
+                    input.strip_prefix("mqtt_").expect("Couldn't strip").to_string(), 
+                    &packet_num, 
+                    &sock, 
+                    args[1].clone() + ":8888");
+            }
         }
-        else if input.contains("sub") {
-            let res = send_sub(input, &packet_num);
-            packet_num = res.0;
-            ret_buf = res.1;
-        }
-        else if input.contains("pub") {
-            let res = send_pub(input, &packet_num);
-            packet_num = res.0;
-            ret_buf = res.1;
-        }
-
-        // send it to the broker
-        socket.send_to(&ret_buf.as_mut(), args[1].clone() + ":8888").expect("Couldn't send to broker");
-
+   
         // receive from broker
-        socket.recv(&mut ack_buffer.as_mut()).expect("Could not read into buffer");
+        socket.recv_from(&mut ack_buffer.as_mut()).expect("Could not read into buffer");
+        // socket.recv(&mut ack_buffer.as_mut()).expect("Could not read into buffer");
 
-        // check that the received bytes are the ack packet
-        let p = cm_decode(&ack_buffer);
+        // check that the received bytes are the ack packet and decode
+        let p: Message = ack_buffer.read(&mut 0).unwrap();
         match p {
-            Ok(Packet::ConnectAck(p)) => {
-                println!("\tConnect Ack packet received: {:?}\n", p.reason_string.unwrap().0);
+            Message::ConnAck(m) => {
+                println!("\tConnect Ack packet received: {:?}\n", m.code);
             },
-            Ok(Packet::SubscribeAck(p)) => {
-                println!("\tSubscribe Ack packet received: {:?}\n", p.reason_string.unwrap().0);
+            Message::SubAck(m) => {
+                println!("\tSubscribe Ack packet received: {:?}\n\tTopic id: {}", m.code, m.topic_id);
             },
-            Ok(Packet::PublishAck(p)) => {
-                println!("\tPublish Ack packet received: {:?}\n", p.reason_string.unwrap().0);
+            Message::PubAck(m) => {
+                println!("\tPublish Ack packet received: {:?}\n", m.code);
                 socket.recv(&mut ack_buffer.as_mut()).expect("Could not read into buffer");
                 if !ack_buffer.is_empty() {
                     read_publish_packet(ack_buffer);
                 }
             }
+            Message::Publish(_m) => {
+                println!("\tPublish packet received");
+                read_publish_packet(ack_buffer);
+            }
+            Message::UnsubAck(m) => {
+                println!("\tUnsubscribe Ack packet received: {:?}\n", m.code);
+            }
             _=> {
                 println!("Ack packet not received");
             }
         }
+        
     }
 
-    /* 
-    let mut packet_num = 00;
-    // Struct used to start requests to the server.
-    // let args: Vec<String> = env::args().collect(); // 0.0.0.0:8888, 127.0.0.1:7878, 127.0.0.1:8888
-    let mut stream = TcpStream::connect("127.0.0.1:7878")?;             // Check TcpStream Connection to the server
-    println!("TCP Connection to MusQraTT Broker Starting...");
-    for _ in 0..1000 {
-        let mut input = String::new();                                  // Allow sender to enter message input 
-        io::stdin().read_line(&mut input).expect("Failed to read");     // First access the input message and read it
-        stream.write(input.as_bytes()).expect("failed to write");       // Write the message so that the receiver can access it 
-
-        // Add buffering so that the receiver can read messages from the stream
-        let mut reader =BufReader::new(&stream);
-        let mut buffer: Vec<u8> = Vec::new();               // Check if this input message values are u8
-        reader.read_until(b'\n',&mut buffer)?;              // Read input information
-            
-        if input.contains("connect") {
-            send_connect(&stream);
-        }
-        // subscribe to a topic
-        else if input.contains("sub") {
-            // let v = input.split(' ').collect();
-            packet_num = send_sub(&stream, input, &packet_num);
-        }
-        // publish to a topic
-        else if input.contains("pub") {
-            // let v = input.split(':').collect();
-            packet_num = send_pub(&stream, input, &packet_num);
-        }
-        // println!("");
-    }
-    */
-    // Ok(())
 }
