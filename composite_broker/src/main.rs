@@ -3,12 +3,12 @@ mod msg_parser;
 use byte::{BytesExt};
 use std::sync::{Mutex, Arc};
 use threadpool::ThreadPool;
-use dashmap::DashMap;
+// use dashmap::DashMap;
 use mqtt_sn::{self, Message};
-use crate::broker::broker::{Client, MBroker}; // Subscriptions
+use crate::broker::broker::{MBroker, Subscriptions}; // Client
 use std::{io, thread, time::Duration, net::{UdpSocket, SocketAddr}}; 
 
-fn handle_packets (broker: &mut MBroker, socket: &UdpSocket, decode: Message, addr: SocketAddr, sub_list: Arc<DashMap<u16, Vec<Client>>>) { // -> MutexGuard<'static, MBroker> {
+fn handle_packets (broker: &mut MBroker, socket: &UdpSocket, decode: Message, addr: SocketAddr, sub_list: Subscriptions ) { //Arc<DashMap<u16, Vec<Client>>>
     println!("\tPacket being handled");
     // if buffer.is_empty() {
     //     let b = MutexGuard::new(broker.clone());
@@ -65,27 +65,25 @@ fn main() -> io::Result<()>{
     let socket = Arc::new(socket);
     
     // allocating the dashmap
-    let sub_list: DashMap<u16, Vec<Client>> = DashMap::new(); // Subscriptions::new();
-    let sub_list = Arc::new(sub_list);
+    let sub_list = Subscriptions::new();
     
     // make the broker 
-    let broker: MBroker =MBroker::new(sub_list);
+    let broker: MBroker = MBroker::new();
     let broker = Mutex::new(broker);
     let broker = Arc::new(broker);
     
     let pool = ThreadPool::new(2);
-    let thread_subs = sub_list.clone();     // add another clone for the dashmap
+    
     loop {
         let mut buf = [0u8; 128];
         let sock = socket.try_clone().expect("Failed to clone socket");    // use socket clone to send to client
         
         // let sock = Arc::new(sock);
-        
         match socket.recv_from(&mut buf) {  // receive the message into buffer
             Ok((_, src)) => {
                     println!("Handling incoming from {}", src);
                     let thread_broker = broker.clone(); 
-                    
+                    let thread_subs = sub_list.clone();     // add another clone for the dashmap
                     pool.execute(move || {
                         println!("Receiving packet from {}", src);
                         let decode : Message = buf.read(&mut 0).unwrap();       // decode and pass it in
@@ -115,9 +113,7 @@ fn main() -> io::Result<()>{
                                     thread::sleep(Duration::from_millis(750));
                                 }
                             }
-                        }
-                        
-                        thread::sleep(Duration::from_millis(750));
+                        }   thread::sleep(Duration::from_millis(750));
                     });
             },
             Err(e) => {
@@ -128,7 +124,7 @@ fn main() -> io::Result<()>{
 
 }
 
-/* 
+
 #[cfg(test)]
 
 mod tests {
@@ -139,7 +135,7 @@ mod tests {
     use mqtt_sn::{Connect, Flags, ClientId, Message, ReturnCode, RejectedReason, Subscribe, TopicName, 
         Publish, PublishData, Unsubscribe};
     use byte::{BytesExt}; // TryWrite, TryRead
-    use std::sync::Arc;
+    // use std::sync::Arc;
     
     static ADDR: &str = "127.0.0.1:7878"; 
     static ADDR2: &str = "192.0.0.1:7777";
@@ -233,9 +229,7 @@ mod tests {
     
     #[test]
     fn test_new_client1() {
-        let sub_list = Subscriptions::new();
-        let sub_list = Arc::new(sub_list);
-        let mut broker = MBroker::new(sub_list);
+        let mut broker = MBroker::new();
         let id = "1004";
         // Create a Connect packet
         let conn_p = Connect {
@@ -257,9 +251,7 @@ mod tests {
     
     #[test]
     fn test_new_client2() {
-        let sub_list = Subscriptions::new();
-        let sub_list = Arc::new(sub_list);
-        let mut broker = MBroker::new(sub_list);
+        let mut broker = MBroker::new();
         // Create two Connect packet
         let conn_p1 = Connect {
             flags: Flags::default(),
@@ -295,8 +287,7 @@ mod tests {
     #[test]
     fn test_new_sub_id() {
         let sub_list = Subscriptions::new();
-        let sub_list = Arc::new(sub_list);
-        let mut broker = MBroker::new(sub_list);
+        let mut broker = MBroker::new();
         let id = "1004";
         let mut flags = Flags::default();
         flags.set_topic_id_type(0x2); // topic_id
@@ -316,7 +307,7 @@ mod tests {
             topic: mqtt_sn::TopicNameOrId::Id(01)
         };
 
-        let res = broker.accept_sub(ADDR.to_string(), sub_p);
+        let res = broker.accept_sub(ADDR.to_string(), sub_p, sub_list);
         // broker.get_sub_list();
         match res {
             Message::SubAck(p) => {
@@ -332,8 +323,7 @@ mod tests {
     #[test]
     fn test_new_sub_name() {
         let sub_list = Subscriptions::new();
-        let sub_list = Arc::new(sub_list);
-        let mut broker = MBroker::new(sub_list);
+        let mut broker = MBroker::new();
         let id = "1004";
         // Create a Connect packet
         let conn_p = Connect {
@@ -351,7 +341,7 @@ mod tests {
             topic: mqtt_sn::TopicNameOrId::Name(TopicName::from("01"))
         };
 
-        let res = broker.accept_sub(ADDR.to_string(), sub_p);
+        let res = broker.accept_sub(ADDR.to_string(), sub_p, sub_list);
         // broker.get_sub_list();
         match res {
             Message::SubAck(p) => {
@@ -367,8 +357,7 @@ mod tests {
     #[test]
     fn test_multiple_subs_names_ids() {
         let sub_list = Subscriptions::new();
-        let sub_list = Arc::new(sub_list);
-        let mut broker = MBroker::new(sub_list);
+        let mut broker = MBroker::new();
         let id = "1004";
         let mut flags = Flags::default();
         flags.set_topic_id_type(0x2); // topic_id
@@ -393,8 +382,8 @@ mod tests {
             topic: mqtt_sn::TopicNameOrId::Id(01)
         };
 
-        let res1 = broker.accept_sub(ADDR.to_string(), sub_p1);
-        let res2 = broker.accept_sub(ADDR.to_string(), sub_p2);
+        let res1 = broker.accept_sub(ADDR.to_string(), sub_p1, sub_list.clone());
+        let res2 = broker.accept_sub(ADDR.to_string(), sub_p2, sub_list.clone());
         // broker.get_sub_list();
         match res1 {
             Message::SubAck(p) => {
@@ -420,8 +409,7 @@ mod tests {
     #[test]
     fn test_multiple_subs_gwu() {
         let sub_list = Subscriptions::new();
-        let sub_list = Arc::new(sub_list);
-        let mut broker = MBroker::new(sub_list);
+        let mut broker = MBroker::new();
         // connect
         let id = "1004";
         // Create a Connect packet
@@ -450,7 +438,7 @@ mod tests {
             topic: mqtt_sn::TopicNameOrId::Name(TopicName::from("elliot"))
         };
 
-        let r1 = broker.accept_sub(ADDR.to_string(), sub_p1);
+        let r1 = broker.accept_sub(ADDR.to_string(), sub_p1, sub_list.clone());
         match r1 {
             Message::SubAck(p) => {
                 println!("Sub for seas Topic id: {}", p.topic_id);
@@ -462,7 +450,7 @@ mod tests {
         }
         
 
-        let r2 = broker.accept_sub(ADDR.to_string(), sub_p2);
+        let r2 = broker.accept_sub(ADDR.to_string(), sub_p2, sub_list.clone());
         match r2 {
             Message::SubAck(p) => {
                 println!("Sub for ccas Topic id: {}", p.topic_id);
@@ -474,7 +462,7 @@ mod tests {
         }
         
 
-        let r3 = broker.accept_sub(ADDR.to_string(), sub_p3);
+        let r3 = broker.accept_sub(ADDR.to_string(), sub_p3, sub_list.clone());
         match r3 {
             Message::SubAck(p) => {
                 println!("Sub for elliot Topic id: {}", p.topic_id);
@@ -490,8 +478,7 @@ mod tests {
     #[test]
     fn test_multiple_subs_unis() {
         let sub_list = Subscriptions::new();
-        let sub_list = Arc::new(sub_list);
-        let mut broker = MBroker::new(sub_list);
+        let mut broker = MBroker::new();
         // Create a Connect packet
         let conn_p = Connect {
             flags: Flags::default(),
@@ -517,7 +504,7 @@ mod tests {
             topic: mqtt_sn::TopicNameOrId::Name(TopicName::from("uwm"))
         };
 
-        let r1 = broker.accept_sub(ADDR.to_string(), sub_p1);
+        let r1 = broker.accept_sub(ADDR.to_string(), sub_p1, sub_list.clone());
         match r1 {
             Message::SubAck(p) => {
                 println!("Sub for gwu Topic id: {}", p.topic_id);
@@ -529,7 +516,7 @@ mod tests {
         }
         
 
-        let r2 = broker.accept_sub(ADDR.to_string(), sub_p2);
+        let r2 = broker.accept_sub(ADDR.to_string(), sub_p2, sub_list.clone());
         match r2 {
             Message::SubAck(p) => {
                 println!("Sub for udel Topic id: {}", p.topic_id);
@@ -541,7 +528,7 @@ mod tests {
         }
         
 
-        let r3 = broker.accept_sub(ADDR.to_string(), sub_p3);
+        let r3 = broker.accept_sub(ADDR.to_string(), sub_p3, sub_list.clone());
         match r3 {
             Message::SubAck(p) => {
                 println!("Sub for uwm Topic id: {}", p.topic_id);
@@ -557,8 +544,7 @@ mod tests {
     #[test]
     fn test_new_pub() {
         let sub_list = Subscriptions::new();
-        let sub_list = Arc::new(sub_list);
-        let mut broker = MBroker::new(sub_list);
+        let mut broker = MBroker::new();
         // Create a client's connect packet
         let conn_p = Connect {
             flags: Flags::default(),
@@ -573,7 +559,7 @@ mod tests {
             msg_id: 01,
             topic: mqtt_sn::TopicNameOrId::Name(TopicName::from("gwu"))
         };
-        let sub_ret = broker.accept_sub(ADDR.to_string(), sub_p);
+        let sub_ret = broker.accept_sub(ADDR.to_string(), sub_p, sub_list.clone());
         let topic = match sub_ret {
             Message::SubAck(p) => p.topic_id,
             _ => 0
@@ -587,7 +573,7 @@ mod tests {
             data: PublishData::from("George Washington")
         };
 
-        let res = broker.accept_pub(ADDR.to_string(), pub_p);
+        let res = broker.accept_pub(ADDR.to_string(), pub_p, sub_list.clone());
         match res.0 {
             Message::PubAck(p) => {
                 assert_eq!(p.code, ReturnCode::Accepted);
@@ -612,8 +598,7 @@ mod tests {
     #[test]
     fn test_new_pub_2clients() {
         let sub_list = Subscriptions::new();
-        let sub_list = Arc::new(sub_list);
-        let mut broker = MBroker::new(sub_list);
+        let mut broker = MBroker::new();
         // Create a client's connect packet
         let conn_p1 = Connect {
             flags: Flags::default(),
@@ -636,7 +621,7 @@ mod tests {
             msg_id: 01,
             topic: mqtt_sn::TopicNameOrId::Name(TopicName::from("gwu"))
         };
-        let sub_ret = broker.accept_sub(ADDR.to_string(), sub_p);
+        let sub_ret = broker.accept_sub(ADDR.to_string(), sub_p, sub_list.clone());
         let topic = match sub_ret {
             Message::SubAck(p) => p.topic_id,
             _ => 0
@@ -651,7 +636,7 @@ mod tests {
         };
 
 
-        let res = broker.accept_pub(ADDR2.to_string(), pub_p);
+        let res = broker.accept_pub(ADDR2.to_string(), pub_p, sub_list.clone());
         match res.0 {
             Message::PubAck(p) => {
                 assert_eq!(p.code, ReturnCode::Accepted);
@@ -677,8 +662,7 @@ mod tests {
     #[test]
     fn test_unsub() {
         let sub_list = Subscriptions::new();
-        let sub_list = Arc::new(sub_list);
-        let mut broker = MBroker::new(sub_list);
+        let mut broker = MBroker::new();
         let mut flags = Flags::default();
         flags.set_topic_id_type(0x2); // topic_id
         // Create a client's connect packet
@@ -696,21 +680,21 @@ mod tests {
             msg_id: 01,
             topic: mqtt_sn::TopicNameOrId::Name(TopicName::from("gwu"))
         };
-        let sub_ret = broker.accept_sub(ADDR.to_string(), sub_p);
+        let sub_ret = broker.accept_sub(ADDR.to_string(), sub_p, sub_list.clone());
         let topic = match sub_ret {
             Message::SubAck(p) => p.topic_id,
             _ => 0
         };
 
         // unsubscribe to the topic
-        println!("Unsubscribing");
+        // println!("Unsubscribing");
         let unsub_p = Unsubscribe {
             flags,
             msg_id: 02,
             topic: mqtt_sn::TopicNameOrId::Id(topic)
         };
-        let unsub_ret = broker.accept_unsub(ADDR.to_string(), unsub_p);
-        broker.get_sub_list();
+        let unsub_ret = broker.accept_unsub(ADDR.to_string(), unsub_p, sub_list.clone());
+        // broker.get_sub_list();
         match unsub_ret {
             Message::UnsubAck(p) => {
                 assert_eq!(p.code, ReturnCode::Accepted);
@@ -724,8 +708,7 @@ mod tests {
     #[test]
     fn test_unsub_invalid() {
         let sub_list = Subscriptions::new();
-        let sub_list = Arc::new(sub_list);
-        let mut broker = MBroker::new(sub_list);
+        let mut broker = MBroker::new();
         let mut flags = Flags::default();
         flags.set_topic_id_type(0x2); // topic_id
         // Create a client's connect packet
@@ -742,7 +725,7 @@ mod tests {
             msg_id: 01,
             topic: mqtt_sn::TopicNameOrId::Name(TopicName::from("gwu"))
         };
-        let sub_ret = broker.accept_sub(ADDR.to_string(), sub_p);
+        let sub_ret = broker.accept_sub(ADDR.to_string(), sub_p, sub_list.clone());
         let topic = match sub_ret {
             Message::SubAck(p) => p.topic_id+1,
             _ => 0
@@ -754,7 +737,7 @@ mod tests {
             msg_id: 02,
             topic: mqtt_sn::TopicNameOrId::Id(topic)
         };
-        let unsub_ret = broker.accept_unsub(ADDR.to_string(), unsub_p);
+        let unsub_ret = broker.accept_unsub(ADDR.to_string(), unsub_p, sub_list.clone());
         match unsub_ret {
             Message::UnsubAck(p) => {
                 assert_eq!(p.code, ReturnCode::Rejected(RejectedReason::InvalidTopicId));
@@ -765,4 +748,3 @@ mod tests {
         }
     }
 }
-*/

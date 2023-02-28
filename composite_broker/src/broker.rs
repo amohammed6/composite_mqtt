@@ -108,7 +108,7 @@ pub mod broker {
         num_clients: u16,
         num_topics: u16,
         client_list: Vec<Client>,
-        concrete_subscriptions_list: Arc<DashMap<u16, Vec<Client>>>, 
+        // concrete_subscriptions_list: Arc<DashMap<u16, Vec<Client>>>, 
         // remove from MBroker struct, create another struct of just the dashmap 
         topicname_id_pairs: HashMap<String, u16>,
     } 
@@ -117,13 +117,13 @@ pub mod broker {
     impl MBroker {
 
         // make a new Broker
-        pub fn new(list: Arc<DashMap<u16, Vec<Client>>>) -> Self {
+        pub fn new() -> Self {
             Self { 
                 num_packets: 2000,
                 num_clients: 0,
                 num_topics: 0,
                 client_list: Vec::new(), 
-                concrete_subscriptions_list: list, //DashMap::new(),
+                // concrete_subscriptions_list: list, //DashMap::new(),
                 topicname_id_pairs: HashMap::new()
             }
         } // end new
@@ -158,7 +158,7 @@ pub mod broker {
 
         // accept a subscribe packet -> (Packet, Option<Vec<String>>)
         #[allow(unused_assignments)]
-        pub fn accept_sub(&mut self, addr: String, packet: Subscribe, sub_list: Arc<DashMap<u16, Vec<Client>>>) -> Message {
+        pub fn accept_sub(&mut self, addr: String, packet: Subscribe, sub_list: Subscriptions) -> Message {  // Arc<DashMap<u16, Vec<Client>>>
             self.num_packets +=1;
             let addr_port: Vec<&str> = addr.split(":").collect();
             let mut cli: Client = Client::new(String::new(), String::new(), String::new());
@@ -197,7 +197,7 @@ pub mod broker {
                     // println!("Topic is : {}", name.to_string());
                     let mut rng = rand::thread_rng();
                     let mut n2: u16 = rng.gen_range(0..999);
-                    while sub_list.contains_key(&n2) {
+                    while sub_list.subscription_list.contains_key(&n2) {
                     // while self.concrete_subscriptions_list.subscription_list.contains_key(&n2) {
                         n2 = rng.gen()
                     }
@@ -207,13 +207,13 @@ pub mod broker {
                 }
             };
             // match self.concrete_subscriptions_list.subscription_list.get_mut(&topic) {
-            match sub_list.get_mut(&topic) {
+            match sub_list.subscription_list.get_mut(&topic) {
                 Some(mut entry) => {
                     entry.push(Client { client_id: cli.client_id.clone(), address: addr_port[0].to_string(), port: addr_port[1].to_string()});
                 },
                 None => {
                     // self.concrete_subscriptions_list.subscription_list.insert(topic, vec![Client { client_id: cli.client_id.clone(), address: addr_port[0].to_string(), port: addr_port[1].to_string() }]);
-                    sub_list.insert(topic, vec![Client { client_id: cli.client_id.clone(), address: addr_port[0].to_string(), port: addr_port[1].to_string() }]);
+                    sub_list.subscription_list.insert(topic, vec![Client { client_id: cli.client_id.clone(), address: addr_port[0].to_string(), port: addr_port[1].to_string() }]);
                 }
             }
             Message::SubAck(SubAck { 
@@ -225,7 +225,7 @@ pub mod broker {
         } // end subscribe
 
         // return the client address (String) and the publish ack packet
-        pub fn accept_pub(&mut self, addr: String, packet: Publish, sub_list: Arc<DashMap<u16, Vec<Client>>>) -> (Message, Message, Vec<String>) {
+        pub fn accept_pub(&mut self, addr: String, packet: Publish, sub_list: Subscriptions) -> (Message, Message, Vec<String>) { // Arc<DashMap<u16, Vec<Client>>>
             self.num_packets +=1;
             let addr_port: Vec<&str> = addr.split(":").collect();
             let pub_p = Message::Publish(Publish { 
@@ -247,7 +247,7 @@ pub mod broker {
             let mut found = false;
             let topic = &packet.topic_id;           
             // let top = self.concrete_subscriptions_list.subscription_list.get(topic);
-            let top = sub_list.get(topic);
+            let top = sub_list.subscription_list.get(topic);
 
             // find the topic in the subscriptions list
             match top {
@@ -285,7 +285,7 @@ pub mod broker {
             }
         } // end publish
 
-        pub fn accept_unsub(&mut self, addr: String, packet: Unsubscribe, sub_list: Arc<DashMap<u16, Vec<Client>>>) -> Message {
+        pub fn accept_unsub(&mut self, addr: String, packet: Unsubscribe, sub_list: Subscriptions) -> Message {
             self.num_packets +=1;
             let addr_port: Vec<&str> = addr.split(":").collect();
             // find the topic
@@ -297,7 +297,7 @@ pub mod broker {
                 }
             };
             // let top = self.concrete_subscriptions_list.subscription_list.get_mut(topic);
-            let top = sub_list.get_mut(topic);
+            let top = sub_list.subscription_list.get_mut(topic);
 
             match top {
                 Some(mut list) => {
