@@ -6,6 +6,8 @@ use mqtt_sn::{self, Message};
 use crate::broker::broker::MBroker;
 use std::{io, thread, time::Duration, net::{UdpSocket, SocketAddr}}; 
 
+extern crate unwinding;
+
 fn handle_packets (broker:  &mut MBroker, socket: &UdpSocket, buffer: &[u8;128], addr: SocketAddr) { // -> MutexGuard<'static, MBroker> {
     println!("\tPacket being handled");
     // if buffer.is_empty() {
