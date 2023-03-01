@@ -146,7 +146,7 @@ pub mod broker {
                         .subscription_list
                         .contains_key(&u16::try_from(num).unwrap())
                     {
-                        self.topic_counter.inc();
+                        num = self.topic_counter.inc();
                     }
                     //add to pairs list
                     self.topicname_id_pairs
