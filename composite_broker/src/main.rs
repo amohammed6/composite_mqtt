@@ -2,52 +2,47 @@ mod broker;
 mod msg_parser;
 use byte::{BytesExt};
 use std::sync::{Mutex, Arc};
-use threadpool::ThreadPool;
-// use dashmap::DashMap;
+// use threadpool::ThreadPool;
 use mqtt_sn::{self, Message};
 use crate::broker::broker::{MBroker, Subscriptions}; // Client
-use std::{io, thread, time::Duration, net::{UdpSocket, SocketAddr}}; 
+use std::{thread, time::Duration, net::{UdpSocket, SocketAddr}}; // io
+
+const NUM_THREADS: u16 = 2;
 
 fn handle_packets (broker: &mut MBroker, socket: &UdpSocket, decode: Message, addr: SocketAddr, sub_list: Subscriptions ) { //Arc<DashMap<u16, Vec<Client>>>
-    println!("\tPacket being handled");
-    // if buffer.is_empty() {
-    //     let b = MutexGuard::new(broker.clone());
-    //     return b;
-    // }
-    // let mut len = 0usize;
-    // let decode : Message = buffer.read(&mut 0).unwrap();
+    // println!("\tPacket being handled");
     match decode {
         Message::Connect(p) => {
-            println!("\tConnecting...");
+            // println!("\tConnecting...");
             let ret_p = broker.accept_connect(addr.to_string(), p);  // returns ack
             let mut ret_buf = [0u8; 128];      // will contain encoded bytes
             ret_buf.write(&mut 0, ret_p).expect("Didn't write to buffer");// write to the buffer
             socket.send_to(&ret_buf.as_mut(), addr).expect("Failed to send a response");
         },
         Message::Subscribe(p) => {
-            println!("\tSubscribing...");
+            // println!("\tSubscribing...");
             let ret_p = broker.accept_sub(addr.to_string(), p, sub_list);
             let mut ret_buf = [0u8; 128];      // will contain encoded bytes
             ret_buf.write(&mut 0, ret_p).expect("Didn't write to buffer"); // write to the buffer    
             socket.send_to(&ret_buf.as_mut(), addr).expect("Failed to send to client");
         },
         Message::Publish(p) => {
-            println!("\tPublishing...");
-                let res = broker.accept_pub(addr.to_string(), p, sub_list);
-                // encode the ack packet and the publish packet again
-                let client_list = &res.2;
-                let (mut ack_buf, mut pub_buf) = ([0u8; 128], [0u8; 128]);
-                ack_buf.write(&mut 0, res.0).expect("Didn't write to buffer"); 
-                pub_buf.write(&mut 0, res.1).expect("Didn't write to buffer");
-                // send the ack packet to this client
-                socket.send_to(&ack_buf.as_mut(), addr).expect("Failed to send to client");
-                for cli in client_list {
-                    println!("Sending to client...{}", cli);
-                    socket.send_to(&pub_buf.as_mut(), cli).expect("Failed to send to subscriber");
-                }
+            // println!("\tPublishing...");
+            let res = broker.accept_pub(addr.to_string(), p, sub_list);
+            // encode the ack packet and the publish packet again
+            let client_list = &res.2;
+            let (mut ack_buf, mut pub_buf) = ([0u8; 128], [0u8; 128]);
+            ack_buf.write(&mut 0, res.0).expect("Didn't write to buffer"); 
+            pub_buf.write(&mut 0, res.1).expect("Didn't write to buffer");
+            // send the ack packet to this client
+            socket.send_to(&ack_buf.as_mut(), addr).expect("Failed to send to client");
+            for cli in client_list {
+                println!("Sending to client...{}", cli);
+                socket.send_to(&pub_buf.as_mut(), cli).expect("Failed to send to subscriber");
+            }
         },
         Message::Unsubscribe(p) => {
-            println!("\tUnsubscribing...");
+            // println!("\tUnsubscribing...");
             let res = broker.accept_unsub(addr.to_string(), p, sub_list);
             let mut ret_buf = [0u8; 128];      // will contain encoded bytes
             ret_buf.write(&mut 0, res).expect("Didn't write to buffer"); // write to the buffer    
@@ -56,10 +51,54 @@ fn handle_packets (broker: &mut MBroker, socket: &UdpSocket, decode: Message, ad
         }
         _ => panic!("Incorrect type returned"),
     };
-    // broker.clone()
 }
 
-fn main() -> io::Result<()>{
+fn thread_fn(broker: &mut Arc<Mutex<MBroker>>, sub_list: Subscriptions, socket: &UdpSocket, mut buf: [u8; 128]) {
+    loop {
+        match socket.recv_from(&mut buf) {  // receive the message into buffer
+            Ok((_, src)) => {
+                    println!("Handling incoming from {}", src);
+                    let thread_broker = broker.clone(); 
+                    let thread_subs = sub_list.clone();     // add another clone for the dashmap
+                    // pool.execute(move || {
+                        println!("Receiving packet from {}", src);
+                        let decode : Message = buf.read(&mut 0).unwrap();       // decode and pass it in
+                        match decode {
+                            Message::Publish(p) => {
+                                if let Ok(mut b) = thread_broker.lock() {
+                                    let res = b.accept_pub(src.to_string(), p, thread_subs);
+                                    
+                                    // encode the ack packet and the publish packet again
+                                    let client_list = &res.2;
+                                    let (mut ack_buf, mut pub_buf) = ([0u8; 128], [0u8; 128]);
+                                    ack_buf.write(&mut 0, res.0).expect("Didn't write to buffer"); 
+                                    pub_buf.write(&mut 0, res.1).expect("Didn't write to buffer");
+                                    
+                                    // send the ack packet to this client
+                                    socket.send_to(&ack_buf.as_mut(), src).expect("Failed to send to client");
+                                    for cli in client_list {
+                                        println!("Sending to client...{}", cli);
+                                        socket.send_to(&pub_buf.as_mut(), cli).expect("Failed to send to subscriber");
+                                    }
+                                }
+                            }
+                            _ => {
+                                if let Ok(mut b) = thread_broker.lock() {
+                                    handle_packets(&mut b, &socket, decode, src, thread_subs);
+                                    thread::sleep(Duration::from_millis(750));
+                                }
+                            }
+                        }   thread::sleep(Duration::from_millis(750));
+                    // });
+            },
+            Err(e) => {
+                eprintln!("Couldn't receive a datagram {}", e);
+            }
+        }
+    }
+}
+
+fn main() { // 
     // make UDP socket
     let socket = UdpSocket::bind("0.0.0.0:8888").expect("Could not bind socket");
     let socket = Arc::new(socket);
@@ -72,13 +111,25 @@ fn main() -> io::Result<()>{
     let broker = Mutex::new(broker);
     let broker = Arc::new(broker);
     
-    let pool = ThreadPool::new(2);
-    
+    // let pool = ThreadPool::new(2);
+
+    for _t in 0..NUM_THREADS {
+        // let thread_handle = thread::spawn( move || {
+            let mut thread_broker = broker.clone(); 
+            let thread_subs = sub_list.clone();     // add another clone for the dashmap
+            let buf = [0u8; 128];
+            let sock = socket.try_clone().expect("Failed to clone socket");    // use socket clone to send to client
+            thread_fn(&mut thread_broker, thread_subs, &sock, buf);
+
+        // }
+            
+        // );
+    } 
+    /* 
     loop {
         let mut buf = [0u8; 128];
         let sock = socket.try_clone().expect("Failed to clone socket");    // use socket clone to send to client
         
-        // let sock = Arc::new(sock);
         match socket.recv_from(&mut buf) {  // receive the message into buffer
             Ok((_, src)) => {
                     println!("Handling incoming from {}", src);
@@ -91,11 +142,13 @@ fn main() -> io::Result<()>{
                             Message::Publish(p) => {
                                 if let Ok(mut b) = thread_broker.lock() {
                                     let res = b.accept_pub(src.to_string(), p, thread_subs);
+                                    
                                     // encode the ack packet and the publish packet again
                                     let client_list = &res.2;
                                     let (mut ack_buf, mut pub_buf) = ([0u8; 128], [0u8; 128]);
                                     ack_buf.write(&mut 0, res.0).expect("Didn't write to buffer"); 
                                     pub_buf.write(&mut 0, res.1).expect("Didn't write to buffer");
+                                    
                                     // send the ack packet to this client
                                     sock.send_to(&ack_buf.as_mut(), src).expect("Failed to send to client");
                                     for cli in client_list {
@@ -103,13 +156,10 @@ fn main() -> io::Result<()>{
                                         sock.send_to(&pub_buf.as_mut(), cli).expect("Failed to send to subscriber");
                                     }
                                 }
-                                
                             }
                             _ => {
                                 if let Ok(mut b) = thread_broker.lock() {
-                                    handle_packets(&mut b, &sock, decode, src, thread_subs);// .unwrap_or_else(|error| eprintln!("{:?}",error))
-                                    // pass in the threadbroker, not the gaurd
-                                    // for publish, use the dashmap
+                                    handle_packets(&mut b, &sock, decode, src, thread_subs);
                                     thread::sleep(Duration::from_millis(750));
                                 }
                             }
@@ -121,6 +171,7 @@ fn main() -> io::Result<()>{
             }
         }
     }
+    */
 
 }
 
