@@ -10,9 +10,5 @@ mqtt-sn = "0.2.2"
 byte = "0.2"
 dashmap = "5.4.0"
 assert_hex = "0.2.2"
-rand = "0.8.4"
-mqtt-v5 = "0.1.1"
-threadpool = "1.8.1"
-bytes = "0.5.4"
-tokio = { version = "1", features = ["net", "rt-multi-thread", "sync", "time", "macros"] }
-tokio-util = { version = "0.7", features = ["codec"] }
+atomic-counter = "1.0.1"
+

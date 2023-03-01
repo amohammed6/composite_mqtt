@@ -1,96 +1,140 @@
 mod broker;
 mod msg_parser;
-use byte::{BytesExt};
-use std::sync::{Mutex, Arc};
+use byte::BytesExt;
+use std::sync::{Arc, Mutex};
 // use threadpool::ThreadPool;
-use mqtt_sn::{self, Message};
 use crate::broker::broker::{MBroker, Subscriptions}; // Client
-use std::{thread, time::Duration, net::{UdpSocket, SocketAddr}}; // io
+use mqtt_sn::{self, Message};
+use std::{
+    net::{SocketAddr, UdpSocket},
+    thread,
+    time::Duration,
+}; // io
 
 const NUM_THREADS: u16 = 2;
 
-fn handle_packets (broker: &mut MBroker, socket: &UdpSocket, decode: Message, addr: SocketAddr, sub_list: Subscriptions ) { //Arc<DashMap<u16, Vec<Client>>>
+fn handle_packets(
+    broker: &mut MBroker,
+    socket: &UdpSocket,
+    decode: Message,
+    addr: SocketAddr,
+    sub_list: Subscriptions,
+) {
+    //Arc<DashMap<u16, Vec<Client>>>
     // println!("\tPacket being handled");
     match decode {
         Message::Connect(p) => {
             // println!("\tConnecting...");
-            let ret_p = broker.accept_connect(addr.to_string(), p);  // returns ack
-            let mut ret_buf = [0u8; 128];      // will contain encoded bytes
-            ret_buf.write(&mut 0, ret_p).expect("Didn't write to buffer");// write to the buffer
-            socket.send_to(&ret_buf.as_mut(), addr).expect("Failed to send a response");
-        },
+            let ret_p = broker.accept_connect(addr.to_string(), p); // returns ack
+            let mut ret_buf = [0u8; 128]; // will contain encoded bytes
+            ret_buf
+                .write(&mut 0, ret_p)
+                .expect("Didn't write to buffer"); // write to the buffer
+            socket
+                .send_to(&ret_buf.as_mut(), addr)
+                .expect("Failed to send a response");
+        }
         Message::Subscribe(p) => {
             // println!("\tSubscribing...");
             let ret_p = broker.accept_sub(addr.to_string(), p, sub_list);
-            let mut ret_buf = [0u8; 128];      // will contain encoded bytes
-            ret_buf.write(&mut 0, ret_p).expect("Didn't write to buffer"); // write to the buffer    
-            socket.send_to(&ret_buf.as_mut(), addr).expect("Failed to send to client");
-        },
+            let mut ret_buf = [0u8; 128]; // will contain encoded bytes
+            ret_buf
+                .write(&mut 0, ret_p)
+                .expect("Didn't write to buffer"); // write to the buffer
+            socket
+                .send_to(&ret_buf.as_mut(), addr)
+                .expect("Failed to send to client");
+        }
         Message::Publish(p) => {
             // println!("\tPublishing...");
             let res = broker.accept_pub(addr.to_string(), p, sub_list);
             // encode the ack packet and the publish packet again
             let client_list = &res.2;
             let (mut ack_buf, mut pub_buf) = ([0u8; 128], [0u8; 128]);
-            ack_buf.write(&mut 0, res.0).expect("Didn't write to buffer"); 
-            pub_buf.write(&mut 0, res.1).expect("Didn't write to buffer");
+            ack_buf
+                .write(&mut 0, res.0)
+                .expect("Didn't write to buffer");
+            pub_buf
+                .write(&mut 0, res.1)
+                .expect("Didn't write to buffer");
             // send the ack packet to this client
-            socket.send_to(&ack_buf.as_mut(), addr).expect("Failed to send to client");
+            socket
+                .send_to(&ack_buf.as_mut(), addr)
+                .expect("Failed to send to client");
             for cli in client_list {
                 println!("Sending to client...{}", cli);
-                socket.send_to(&pub_buf.as_mut(), cli).expect("Failed to send to subscriber");
+                socket
+                    .send_to(&pub_buf.as_mut(), cli)
+                    .expect("Failed to send to subscriber");
             }
-        },
+        }
         Message::Unsubscribe(p) => {
             // println!("\tUnsubscribing...");
             let res = broker.accept_unsub(addr.to_string(), p, sub_list);
-            let mut ret_buf = [0u8; 128];      // will contain encoded bytes
-            ret_buf.write(&mut 0, res).expect("Didn't write to buffer"); // write to the buffer    
-            socket.send_to(&ret_buf.as_mut(), addr).expect("Failed to send to client");
+            let mut ret_buf = [0u8; 128]; // will contain encoded bytes
+            ret_buf.write(&mut 0, res).expect("Didn't write to buffer"); // write to the buffer
+            socket
+                .send_to(&ret_buf.as_mut(), addr)
+                .expect("Failed to send to client");
             // broker.get_sub_list();
         }
         _ => panic!("Incorrect type returned"),
     };
 }
 
-fn thread_fn(broker: &mut Arc<Mutex<MBroker>>, sub_list: Subscriptions, socket: &UdpSocket, mut buf: [u8; 128]) {
+fn thread_fn(
+    broker: &mut Arc<Mutex<MBroker>>,
+    sub_list: Subscriptions,
+    socket: &UdpSocket,
+    mut buf: [u8; 128],
+) {
     loop {
-        match socket.recv_from(&mut buf) {  // receive the message into buffer
+        match socket.recv_from(&mut buf) {
+            // receive the message into buffer
             Ok((_, src)) => {
-                    println!("Handling incoming from {}", src);
-                    let thread_broker = broker.clone(); 
-                    let thread_subs = sub_list.clone();     // add another clone for the dashmap
-                    // pool.execute(move || {
-                        println!("Receiving packet from {}", src);
-                        let decode : Message = buf.read(&mut 0).unwrap();       // decode and pass it in
-                        match decode {
-                            Message::Publish(p) => {
-                                if let Ok(mut b) = thread_broker.lock() {
-                                    let res = b.accept_pub(src.to_string(), p, thread_subs);
-                                    
-                                    // encode the ack packet and the publish packet again
-                                    let client_list = &res.2;
-                                    let (mut ack_buf, mut pub_buf) = ([0u8; 128], [0u8; 128]);
-                                    ack_buf.write(&mut 0, res.0).expect("Didn't write to buffer"); 
-                                    pub_buf.write(&mut 0, res.1).expect("Didn't write to buffer");
-                                    
-                                    // send the ack packet to this client
-                                    socket.send_to(&ack_buf.as_mut(), src).expect("Failed to send to client");
-                                    for cli in client_list {
-                                        println!("Sending to client...{}", cli);
-                                        socket.send_to(&pub_buf.as_mut(), cli).expect("Failed to send to subscriber");
-                                    }
-                                }
+                println!("Handling incoming from {}", src);
+                let thread_broker = broker.clone();
+                let thread_subs = sub_list.clone(); // add another clone for the dashmap
+                                                    // pool.execute(move || {
+                println!("Receiving packet from {}", src);
+                let decode: Message = buf.read(&mut 0).unwrap(); // decode and pass it in
+                match decode {
+                    Message::Publish(p) => {
+                        if let Ok(mut b) = thread_broker.lock() {
+                            let res = b.accept_pub(src.to_string(), p, thread_subs);
+
+                            // encode the ack packet and the publish packet again
+                            let client_list = &res.2;
+                            let (mut ack_buf, mut pub_buf) = ([0u8; 128], [0u8; 128]);
+                            ack_buf
+                                .write(&mut 0, res.0)
+                                .expect("Didn't write to buffer");
+                            pub_buf
+                                .write(&mut 0, res.1)
+                                .expect("Didn't write to buffer");
+
+                            // send the ack packet to this client
+                            socket
+                                .send_to(&ack_buf.as_mut(), src)
+                                .expect("Failed to send to client");
+                            for cli in client_list {
+                                println!("Sending to client...{}", cli);
+                                socket
+                                    .send_to(&pub_buf.as_mut(), cli)
+                                    .expect("Failed to send to subscriber");
                             }
-                            _ => {
-                                if let Ok(mut b) = thread_broker.lock() {
-                                    handle_packets(&mut b, &socket, decode, src, thread_subs);
-                                    thread::sleep(Duration::from_millis(750));
-                                }
-                            }
-                        }   thread::sleep(Duration::from_millis(750));
-                    // });
-            },
+                        }
+                    }
+                    _ => {
+                        if let Ok(mut b) = thread_broker.lock() {
+                            handle_packets(&mut b, &socket, decode, src, thread_subs);
+                            thread::sleep(Duration::from_millis(750));
+                        }
+                    }
+                }
+                thread::sleep(Duration::from_millis(750));
+                // });
+            }
             Err(e) => {
                 eprintln!("Couldn't receive a datagram {}", e);
             }
@@ -98,42 +142,43 @@ fn thread_fn(broker: &mut Arc<Mutex<MBroker>>, sub_list: Subscriptions, socket: 
     }
 }
 
-fn main() { // 
+fn main() {
+    //
     // make UDP socket
     let socket = UdpSocket::bind("0.0.0.0:8888").expect("Could not bind socket");
     let socket = Arc::new(socket);
-    
+
     // allocating the dashmap
     let sub_list = Subscriptions::new();
-    
-    // make the broker 
+
+    // make the broker
     let broker: MBroker = MBroker::new();
     let broker = Mutex::new(broker);
     let broker = Arc::new(broker);
-    
+
     // let pool = ThreadPool::new(2);
 
     for _t in 0..NUM_THREADS {
         // let thread_handle = thread::spawn( move || {
-            let mut thread_broker = broker.clone(); 
-            let thread_subs = sub_list.clone();     // add another clone for the dashmap
-            let buf = [0u8; 128];
-            let sock = socket.try_clone().expect("Failed to clone socket");    // use socket clone to send to client
-            thread_fn(&mut thread_broker, thread_subs, &sock, buf);
+        let mut thread_broker = broker.clone();
+        let thread_subs = sub_list.clone(); // add another clone for the dashmap
+        let buf = [0u8; 128];
+        let sock = socket.try_clone().expect("Failed to clone socket"); // use socket clone to send to client
+        thread_fn(&mut thread_broker, thread_subs, &sock, buf);
 
         // }
-            
+
         // );
-    } 
-    /* 
+    }
+    /*
     loop {
         let mut buf = [0u8; 128];
         let sock = socket.try_clone().expect("Failed to clone socket");    // use socket clone to send to client
-        
+
         match socket.recv_from(&mut buf) {  // receive the message into buffer
             Ok((_, src)) => {
                     println!("Handling incoming from {}", src);
-                    let thread_broker = broker.clone(); 
+                    let thread_broker = broker.clone();
                     let thread_subs = sub_list.clone();     // add another clone for the dashmap
                     pool.execute(move || {
                         println!("Receiving packet from {}", src);
@@ -142,13 +187,13 @@ fn main() { //
                             Message::Publish(p) => {
                                 if let Ok(mut b) = thread_broker.lock() {
                                     let res = b.accept_pub(src.to_string(), p, thread_subs);
-                                    
+
                                     // encode the ack packet and the publish packet again
                                     let client_list = &res.2;
                                     let (mut ack_buf, mut pub_buf) = ([0u8; 128], [0u8; 128]);
-                                    ack_buf.write(&mut 0, res.0).expect("Didn't write to buffer"); 
+                                    ack_buf.write(&mut 0, res.0).expect("Didn't write to buffer");
                                     pub_buf.write(&mut 0, res.1).expect("Didn't write to buffer");
-                                    
+
                                     // send the ack packet to this client
                                     sock.send_to(&ack_buf.as_mut(), src).expect("Failed to send to client");
                                     for cli in client_list {
@@ -172,46 +217,46 @@ fn main() { //
         }
     }
     */
-
 }
-
 
 #[cfg(test)]
 
 mod tests {
-    use core::panic;
     use assert_hex::*;
+    use core::panic;
 
     use crate::broker::broker::{MBroker, Subscriptions};
-    use mqtt_sn::{Connect, Flags, ClientId, Message, ReturnCode, RejectedReason, Subscribe, TopicName, 
-        Publish, PublishData, Unsubscribe};
-    use byte::{BytesExt}; // TryWrite, TryRead
-    // use std::sync::Arc;
-    
-    static ADDR: &str = "127.0.0.1:7878"; 
+    use byte::BytesExt;
+    use mqtt_sn::{
+        ClientId, Connect, Flags, Message, Publish, PublishData, RejectedReason, ReturnCode,
+        Subscribe, TopicName, Unsubscribe,
+    }; // TryWrite, TryRead
+       // use std::sync::Arc;
+
+    static ADDR: &str = "127.0.0.1:7878";
     static ADDR2: &str = "192.0.0.1:7777";
 
     #[test]
     fn test_read_publish_packet() {
         let mut bytes = [0u8; 20];
         let mut len = 0usize;
-        let connect_packet = Message::Publish(Publish { 
-            flags: Flags::default(), 
-            topic_id: 30, 
-            msg_id: 01, 
-            data: PublishData::from("George") 
+        let connect_packet = Message::Publish(Publish {
+            flags: Flags::default(),
+            topic_id: 30,
+            msg_id: 01,
+            data: PublishData::from("George"),
         });
         // encode
-        bytes.write(&mut len, connect_packet.clone()).unwrap(); 
+        bytes.write(&mut len, connect_packet.clone()).unwrap();
         // decode
-        let decode : Message =bytes.read(&mut 0).unwrap();
+        let decode: Message = bytes.read(&mut 0).unwrap();
         assert_eq!(connect_packet, decode);
         match decode {
             Message::Publish(m) => {
                 assert_eq!(30, m.topic_id);
                 println!("{:?}", m.topic_id);
             }
-            _ =>{}
+            _ => {}
         }
     }
 
@@ -238,22 +283,22 @@ mod tests {
         let mut len = 0usize;
         let mut flags = Flags::default();
         flags.set_topic_id_type(0x2); // topic_id
-        let connect_packet = Message::Subscribe(Subscribe { 
-            flags, 
-            msg_id: 01, 
-            topic: mqtt_sn::TopicNameOrId::Id(30)
+        let connect_packet = Message::Subscribe(Subscribe {
+            flags,
+            msg_id: 01,
+            topic: mqtt_sn::TopicNameOrId::Id(30),
         });
         // encode
         bytes.write(&mut len, connect_packet.clone()).unwrap();
         // decode
-        let decode : Message =bytes.read(&mut 0).unwrap();
+        let decode: Message = bytes.read(&mut 0).unwrap();
         assert_eq!(connect_packet, decode);
         match decode {
             Message::Subscribe(m) => {
                 // assert_eq!(mqtt_sn::TopicNameOrId::Id(30), m.topic);
                 println!("{:?}", m.topic);
             }
-            _ =>{}
+            _ => {}
         }
     }
 
@@ -261,23 +306,23 @@ mod tests {
     fn test_read_connect_packet() {
         let mut bytes = [0u8; 20];
         let mut len = 0usize;
-        let connect_packet = Message::Connect(Connect{
+        let connect_packet = Message::Connect(Connect {
             flags: Flags::default(),
             duration: 30,
-            client_id: ClientId::from("hey")
+            client_id: ClientId::from("hey"),
         });
         // connect_packet.try_write(&mut bytes, ()).expect("Couldn't write");
         bytes.write(&mut len, connect_packet.clone()).unwrap();
-        let decode : Message =bytes.read(&mut 0).unwrap();
+        let decode: Message = bytes.read(&mut 0).unwrap();
         assert_eq!(connect_packet, decode);
         match decode {
             Message::Connect(m) => {
                 println!("{:?}", m.client_id)
             }
-            _ =>{}
+            _ => {}
         }
     }
-    
+
     #[test]
     fn test_new_client1() {
         let mut broker = MBroker::new();
@@ -286,20 +331,19 @@ mod tests {
         let conn_p = Connect {
             flags: Flags::default(),
             duration: 30,
-            client_id: ClientId::from(id)
+            client_id: ClientId::from(id),
         };
-    
+
         let res = broker.accept_connect(ADDR.to_string(), conn_p);
         // broker.get_client_list();
         match res {
             Message::ConnAck(p) => {
                 assert_eq!(p.code, ReturnCode::Accepted);
-            },
-            _=> {}
+            }
+            _ => {}
         }
     }
 
-    
     #[test]
     fn test_new_client2() {
         let mut broker = MBroker::new();
@@ -307,13 +351,13 @@ mod tests {
         let conn_p1 = Connect {
             flags: Flags::default(),
             duration: 30,
-            client_id: ClientId::from("1004")
+            client_id: ClientId::from("1004"),
         };
 
         let conn_p2 = Connect {
             flags: Flags::default(),
             duration: 30,
-            client_id: ClientId::from("1005")
+            client_id: ClientId::from("1005"),
         };
 
         let r1 = broker.accept_connect(ADDR.to_string(), conn_p1);
@@ -322,19 +366,18 @@ mod tests {
         match r1 {
             Message::ConnAck(p) => {
                 assert_eq!(p.code, ReturnCode::Accepted);
-            },
-            _=> {}
+            }
+            _ => {}
         }
 
         match r2 {
             Message::ConnAck(p) => {
                 assert_eq!(p.code, ReturnCode::Rejected(RejectedReason::Congestion));
-            },
-            _=> {}
+            }
+            _ => {}
         }
     }
 
-    
     #[test]
     fn test_new_sub_id() {
         let sub_list = Subscriptions::new();
@@ -342,20 +385,20 @@ mod tests {
         let id = "1004";
         let mut flags = Flags::default();
         flags.set_topic_id_type(0x2); // topic_id
-        // Create a Connect packet
+                                      // Create a Connect packet
         let conn_p = Connect {
             flags: Flags::default(),
             duration: 30,
-            client_id: ClientId::from(id)
+            client_id: ClientId::from(id),
         };
-    
+
         broker.accept_connect(ADDR.to_string(), conn_p);
-        
+
         // create a subscribe packet
         let sub_p = Subscribe {
             flags,
             msg_id: 01,
-            topic: mqtt_sn::TopicNameOrId::Id(01)
+            topic: mqtt_sn::TopicNameOrId::Id(01),
         };
 
         let res = broker.accept_sub(ADDR.to_string(), sub_p, sub_list);
@@ -363,12 +406,11 @@ mod tests {
         match res {
             Message::SubAck(p) => {
                 assert_eq!(p.code, ReturnCode::Accepted);
-            },
+            }
             _ => {
                 panic!("Error: didn't receive ack packet");
-            } 
+            }
         }
-        
     }
 
     #[test]
@@ -380,16 +422,16 @@ mod tests {
         let conn_p = Connect {
             flags: Flags::default(),
             duration: 30,
-            client_id: ClientId::from(id)
+            client_id: ClientId::from(id),
         };
-    
+
         broker.accept_connect(ADDR.to_string(), conn_p);
-        
+
         // create a subscribe packet
         let sub_p = Subscribe {
             flags: Flags::default(),
             msg_id: 01,
-            topic: mqtt_sn::TopicNameOrId::Name(TopicName::from("01"))
+            topic: mqtt_sn::TopicNameOrId::Name(TopicName::from("01")),
         };
 
         let res = broker.accept_sub(ADDR.to_string(), sub_p, sub_list);
@@ -397,12 +439,11 @@ mod tests {
         match res {
             Message::SubAck(p) => {
                 assert_eq!(p.code, ReturnCode::Accepted);
-            },
+            }
             _ => {
                 panic!("Error: didn't receive ack packet");
-            } 
+            }
         }
-        
     }
 
     #[test]
@@ -412,25 +453,25 @@ mod tests {
         let id = "1004";
         let mut flags = Flags::default();
         flags.set_topic_id_type(0x2); // topic_id
-        // Create a Connect packet
+                                      // Create a Connect packet
         let conn_p = Connect {
             flags: Flags::default(),
             duration: 30,
-            client_id: ClientId::from(id)
+            client_id: ClientId::from(id),
         };
-    
+
         broker.accept_connect(ADDR.to_string(), conn_p);
-        
+
         // create a subscribe packet
         let sub_p1 = Subscribe {
             flags: Flags::default(),
             msg_id: 01,
-            topic: mqtt_sn::TopicNameOrId::Name(TopicName::from("01"))
+            topic: mqtt_sn::TopicNameOrId::Name(TopicName::from("01")),
         };
         let sub_p2 = Subscribe {
             flags,
             msg_id: 01,
-            topic: mqtt_sn::TopicNameOrId::Id(01)
+            topic: mqtt_sn::TopicNameOrId::Id(01),
         };
 
         let res1 = broker.accept_sub(ADDR.to_string(), sub_p1, sub_list.clone());
@@ -440,21 +481,20 @@ mod tests {
             Message::SubAck(p) => {
                 println!("Sub for \"01\" Topic id: {}", p.topic_id);
                 assert_eq!(p.code, ReturnCode::Accepted);
-            },
+            }
             _ => {
                 panic!("Error: didn't receive ack packet");
-            } 
+            }
         }
         match res2 {
             Message::SubAck(p) => {
                 println!("Sub for 01 Topic id: {}", p.topic_id);
                 assert_eq!(p.code, ReturnCode::Accepted);
-            },
+            }
             _ => {
                 panic!("Error: didn't receive ack packet");
-            } 
+            }
         }
-        
     }
 
     #[test]
@@ -467,26 +507,26 @@ mod tests {
         let conn_p = Connect {
             flags: Flags::default(),
             duration: 30,
-            client_id: ClientId::from(id)
+            client_id: ClientId::from(id),
         };
-    
+
         broker.accept_connect(ADDR.to_string(), conn_p);
 
         // create subscribe packets
         let sub_p1 = Subscribe {
             flags: Flags::default(),
             msg_id: 01,
-            topic: mqtt_sn::TopicNameOrId::Name(TopicName::from("seas"))
+            topic: mqtt_sn::TopicNameOrId::Name(TopicName::from("seas")),
         };
         let sub_p2 = Subscribe {
             flags: Flags::default(),
             msg_id: 02,
-            topic: mqtt_sn::TopicNameOrId::Name(TopicName::from("ccas"))
+            topic: mqtt_sn::TopicNameOrId::Name(TopicName::from("ccas")),
         };
         let sub_p3 = Subscribe {
             flags: Flags::default(),
             msg_id: 02,
-            topic: mqtt_sn::TopicNameOrId::Name(TopicName::from("elliot"))
+            topic: mqtt_sn::TopicNameOrId::Name(TopicName::from("elliot")),
         };
 
         let r1 = broker.accept_sub(ADDR.to_string(), sub_p1, sub_list.clone());
@@ -495,11 +535,10 @@ mod tests {
                 println!("Sub for seas Topic id: {}", p.topic_id);
                 assert_eq!(p.code, ReturnCode::Accepted);
             }
-            _=> {
+            _ => {
                 panic!("Error: didn't receive ack packet");
             }
         }
-        
 
         let r2 = broker.accept_sub(ADDR.to_string(), sub_p2, sub_list.clone());
         match r2 {
@@ -507,11 +546,10 @@ mod tests {
                 println!("Sub for ccas Topic id: {}", p.topic_id);
                 assert_eq!(p.code, ReturnCode::Accepted);
             }
-            _=> {
+            _ => {
                 panic!("Error: didn't receive ack packet");
             }
         }
-        
 
         let r3 = broker.accept_sub(ADDR.to_string(), sub_p3, sub_list.clone());
         match r3 {
@@ -519,13 +557,13 @@ mod tests {
                 println!("Sub for elliot Topic id: {}", p.topic_id);
                 assert_eq!(p.code, ReturnCode::Accepted);
             }
-            _=> {
+            _ => {
                 panic!("Error: didn't receive ack packet");
             }
         }
-        // broker.get_sub_list(); 
+        // broker.get_sub_list();
     }
-  
+
     #[test]
     fn test_multiple_subs_unis() {
         let sub_list = Subscriptions::new();
@@ -534,25 +572,25 @@ mod tests {
         let conn_p = Connect {
             flags: Flags::default(),
             duration: 30,
-            client_id: ClientId::from("1004")
+            client_id: ClientId::from("1004"),
         };
-    
+
         broker.accept_connect(ADDR.to_string(), conn_p);
         // create subscribe packets
         let sub_p1 = Subscribe {
             flags: Flags::default(),
             msg_id: 01,
-            topic: mqtt_sn::TopicNameOrId::Name(TopicName::from("gwu"))
+            topic: mqtt_sn::TopicNameOrId::Name(TopicName::from("gwu")),
         };
         let sub_p2 = Subscribe {
             flags: Flags::default(),
             msg_id: 02,
-            topic: mqtt_sn::TopicNameOrId::Name(TopicName::from("udel"))
+            topic: mqtt_sn::TopicNameOrId::Name(TopicName::from("udel")),
         };
         let sub_p3 = Subscribe {
             flags: Flags::default(),
             msg_id: 03,
-            topic: mqtt_sn::TopicNameOrId::Name(TopicName::from("uwm"))
+            topic: mqtt_sn::TopicNameOrId::Name(TopicName::from("uwm")),
         };
 
         let r1 = broker.accept_sub(ADDR.to_string(), sub_p1, sub_list.clone());
@@ -561,11 +599,10 @@ mod tests {
                 println!("Sub for gwu Topic id: {}", p.topic_id);
                 assert_eq!(p.code, ReturnCode::Accepted);
             }
-            _=> {
+            _ => {
                 panic!("Error: didn't receive ack packet");
             }
         }
-        
 
         let r2 = broker.accept_sub(ADDR.to_string(), sub_p2, sub_list.clone());
         match r2 {
@@ -573,11 +610,10 @@ mod tests {
                 println!("Sub for udel Topic id: {}", p.topic_id);
                 assert_eq!(p.code, ReturnCode::Accepted);
             }
-            _=> {
+            _ => {
                 panic!("Error: didn't receive ack packet");
             }
         }
-        
 
         let r3 = broker.accept_sub(ADDR.to_string(), sub_p3, sub_list.clone());
         match r3 {
@@ -585,13 +621,12 @@ mod tests {
                 println!("Sub for uwm Topic id: {}", p.topic_id);
                 assert_eq!(p.code, ReturnCode::Accepted);
             }
-            _=> {
+            _ => {
                 panic!("Error: didn't receive ack packet");
             }
         }
-        
     }
-  
+
     #[test]
     fn test_new_pub() {
         let sub_list = Subscriptions::new();
@@ -600,7 +635,7 @@ mod tests {
         let conn_p = Connect {
             flags: Flags::default(),
             duration: 30,
-            client_id: ClientId::from("1004")
+            client_id: ClientId::from("1004"),
         };
         broker.accept_connect(ADDR.to_string(), conn_p);
 
@@ -608,12 +643,12 @@ mod tests {
         let sub_p = Subscribe {
             flags: Flags::default(),
             msg_id: 01,
-            topic: mqtt_sn::TopicNameOrId::Name(TopicName::from("gwu"))
+            topic: mqtt_sn::TopicNameOrId::Name(TopicName::from("gwu")),
         };
         let sub_ret = broker.accept_sub(ADDR.to_string(), sub_p, sub_list.clone());
         let topic = match sub_ret {
             Message::SubAck(p) => p.topic_id,
-            _ => 0
+            _ => 0,
         };
 
         // create publish packet
@@ -621,7 +656,7 @@ mod tests {
             flags: Flags::default(),
             topic_id: topic,
             msg_id: 02,
-            data: PublishData::from("George Washington")
+            data: PublishData::from("George Washington"),
         };
 
         let res = broker.accept_pub(ADDR.to_string(), pub_p, sub_list.clone());
@@ -629,21 +664,21 @@ mod tests {
             Message::PubAck(p) => {
                 assert_eq!(p.code, ReturnCode::Accepted);
             }
-            _=> {
+            _ => {
                 panic!("Error: didn't receive ack packet");
             }
         }
-        
+
         match res.1 {
             Message::Publish(p) => {
                 println!("Published data: {:?}", p.data);
                 assert_eq!(p.topic_id, topic);
             }
-            _=> {
+            _ => {
                 panic!("Error didn't receive ")
             }
         }
-        println!("{:?}", res.2);  // two expected
+        println!("{:?}", res.2); // two expected
     }
 
     #[test]
@@ -654,7 +689,7 @@ mod tests {
         let conn_p1 = Connect {
             flags: Flags::default(),
             duration: 30,
-            client_id: ClientId::from("1004")
+            client_id: ClientId::from("1004"),
         };
         broker.accept_connect(ADDR.to_string(), conn_p1);
 
@@ -662,7 +697,7 @@ mod tests {
         let conn_p2 = Connect {
             flags: Flags::default(),
             duration: 30,
-            client_id: ClientId::from("1005")
+            client_id: ClientId::from("1005"),
         };
         broker.accept_connect(ADDR2.to_string(), conn_p2);
 
@@ -670,12 +705,12 @@ mod tests {
         let sub_p = Subscribe {
             flags: Flags::default(),
             msg_id: 01,
-            topic: mqtt_sn::TopicNameOrId::Name(TopicName::from("gwu"))
+            topic: mqtt_sn::TopicNameOrId::Name(TopicName::from("gwu")),
         };
         let sub_ret = broker.accept_sub(ADDR.to_string(), sub_p, sub_list.clone());
         let topic = match sub_ret {
             Message::SubAck(p) => p.topic_id,
-            _ => 0
+            _ => 0,
         };
 
         // create publish packet
@@ -683,16 +718,15 @@ mod tests {
             flags: Flags::default(),
             topic_id: topic,
             msg_id: 02,
-            data: PublishData::from("George Washington University")
+            data: PublishData::from("George Washington University"),
         };
-
 
         let res = broker.accept_pub(ADDR2.to_string(), pub_p, sub_list.clone());
         match res.0 {
             Message::PubAck(p) => {
                 assert_eq!(p.code, ReturnCode::Accepted);
             }
-            _=> {
+            _ => {
                 panic!("Error: didn't receive ack packet");
             }
         }
@@ -702,12 +736,12 @@ mod tests {
                 println!("Published data: {:?}", p.data);
                 assert_eq!(p.topic_id, topic);
             }
-            _=> {
+            _ => {
                 panic!("Error: publish packet not returned")
             }
         }
-        
-        println!("{:?}", res.2);  // two expected
+
+        println!("{:?}", res.2); // two expected
     }
 
     #[test]
@@ -716,11 +750,11 @@ mod tests {
         let mut broker = MBroker::new();
         let mut flags = Flags::default();
         flags.set_topic_id_type(0x2); // topic_id
-        // Create a client's connect packet
+                                      // Create a client's connect packet
         let conn_p1 = Connect {
             flags: Flags::default(),
             duration: 30,
-            client_id: ClientId::from("1004")
+            client_id: ClientId::from("1004"),
         };
         broker.accept_connect(ADDR.to_string(), conn_p1);
 
@@ -729,12 +763,12 @@ mod tests {
         let sub_p = Subscribe {
             flags: Flags::default(),
             msg_id: 01,
-            topic: mqtt_sn::TopicNameOrId::Name(TopicName::from("gwu"))
+            topic: mqtt_sn::TopicNameOrId::Name(TopicName::from("gwu")),
         };
         let sub_ret = broker.accept_sub(ADDR.to_string(), sub_p, sub_list.clone());
         let topic = match sub_ret {
             Message::SubAck(p) => p.topic_id,
-            _ => 0
+            _ => 0,
         };
 
         // unsubscribe to the topic
@@ -742,7 +776,7 @@ mod tests {
         let unsub_p = Unsubscribe {
             flags,
             msg_id: 02,
-            topic: mqtt_sn::TopicNameOrId::Id(topic)
+            topic: mqtt_sn::TopicNameOrId::Id(topic),
         };
         let unsub_ret = broker.accept_unsub(ADDR.to_string(), unsub_p, sub_list.clone());
         // broker.get_sub_list();
@@ -750,7 +784,7 @@ mod tests {
             Message::UnsubAck(p) => {
                 assert_eq!(p.code, ReturnCode::Accepted);
             }
-            _=> {
+            _ => {
                 panic!("Error: didn't receive ack packet");
             }
         }
@@ -762,11 +796,11 @@ mod tests {
         let mut broker = MBroker::new();
         let mut flags = Flags::default();
         flags.set_topic_id_type(0x2); // topic_id
-        // Create a client's connect packet
+                                      // Create a client's connect packet
         let conn_p1 = Connect {
             flags: Flags::default(),
             duration: 30,
-            client_id: ClientId::from("1004")
+            client_id: ClientId::from("1004"),
         };
         broker.accept_connect(ADDR.to_string(), conn_p1);
 
@@ -774,26 +808,26 @@ mod tests {
         let sub_p = Subscribe {
             flags: Flags::default(),
             msg_id: 01,
-            topic: mqtt_sn::TopicNameOrId::Name(TopicName::from("gwu"))
+            topic: mqtt_sn::TopicNameOrId::Name(TopicName::from("gwu")),
         };
         let sub_ret = broker.accept_sub(ADDR.to_string(), sub_p, sub_list.clone());
         let topic = match sub_ret {
-            Message::SubAck(p) => p.topic_id+1,
-            _ => 0
+            Message::SubAck(p) => p.topic_id + 1,
+            _ => 0,
         };
 
         // unsubscribe to the topic
         let unsub_p = Unsubscribe {
             flags,
             msg_id: 02,
-            topic: mqtt_sn::TopicNameOrId::Id(topic)
+            topic: mqtt_sn::TopicNameOrId::Id(topic),
         };
         let unsub_ret = broker.accept_unsub(ADDR.to_string(), unsub_p, sub_list.clone());
         match unsub_ret {
             Message::UnsubAck(p) => {
                 assert_eq!(p.code, ReturnCode::Rejected(RejectedReason::InvalidTopicId));
             }
-            _=> {
+            _ => {
                 panic!("Error: didn't receive ack packet");
             }
         }

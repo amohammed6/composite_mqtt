@@ -1,9 +1,6 @@
 pub mod msg_parser {
-    use bytes::{BytesMut};
-    use mqtt_v5::{
-        decoder, encoder,
-        types::{ProtocolVersion},
-    };
+    use bytes::BytesMut;
+    use mqtt_v5::{decoder, encoder, types::ProtocolVersion};
 
     #[allow(dead_code)]
     pub fn cm_encode(
@@ -22,7 +19,7 @@ pub mod msg_parser {
     //  input: bytes of encoded packet
     //  output: packet
     #[allow(dead_code)]
-    pub fn cm_decode(buffer: & [u8]) -> Result<mqtt_v5::types::Packet, String> {
+    pub fn cm_decode(buffer: &[u8]) -> Result<mqtt_v5::types::Packet, String> {
         let mut b = BytesMut::from(buffer);
         if buffer.is_empty() {
             Err("Buffer was empty".to_string())
