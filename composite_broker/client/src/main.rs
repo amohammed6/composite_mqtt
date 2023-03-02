@@ -176,28 +176,28 @@ fn main() -> io::Result<()>{
         // add logic for calling the functions
         if !input.is_empty() {
             if input.contains("connect") {
-                send_connect(&sock, args[1].clone() + ":8888");
+                send_connect(&sock, "10.10.1.2:8888".to_string());
             }
             else if input.contains("unsub") {
                 packet_num = send_unsub(
                     input.strip_prefix("mqtt_").expect("Couldn't strip").to_string(), 
                     &packet_num, 
                     &sock, 
-                    args[1].clone() + ":8888")
+                    "10.10.1.2:47138".to_string())
             }
             else if input.contains("sub") {
                 packet_num = send_sub(
                     input.strip_prefix("mqtt_").expect("Couldn't strip").to_string(),
                     &packet_num, 
                     &sock, 
-                    args[1].clone() + ":8888");
+                    "10.10.1.2:47138".to_string());
             }
             else if input.contains("pub") {
                 packet_num = send_pub(
                     input.strip_prefix("mqtt_").expect("Couldn't strip").to_string(), 
                     &packet_num, 
                     &sock, 
-                    args[1].clone() + ":8888");
+                    "10.10.1.2:47138".to_string());
             }
         }
    
