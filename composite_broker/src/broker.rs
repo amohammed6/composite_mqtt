@@ -289,7 +289,7 @@ pub mod broker {
                         // if it's the last one, remove the topic
                         if list.value().len() == 0 {
                             // list.key()
-                            // let it = self.concrete_subscriptions_list.subscription_list.remove(topic);
+                            // let it = sub_list.subscription_list.remove(topic);
                             // println!("List is 0 , {:?}", it);
                         }
                     }
@@ -303,7 +303,7 @@ pub mod broker {
             }
 
             Message::UnsubAck(UnsubAck {
-                msg_id: self.num_packets,
+                msg_id: packet.msg_id,
                 code: ReturnCode::Accepted,
             })
         }

@@ -1,3 +1,5 @@
+mod test;
+
 use byte::BytesExt; 
 use mqtt_sn::{
     ClientId, Connect, Flags, Message, Publish, PublishData, Subscribe, TopicName, TopicNameOrId,
@@ -5,6 +7,8 @@ use mqtt_sn::{
 };
 use std::borrow::Borrow;
 use std::io::{self};
+// use std::time::{SystemTime, Instant}; // Duration
+// use chrono::prelude::*;
 use std::net::UdpSocket; 
 use std::{env, str};
 
@@ -21,7 +25,7 @@ fn send_connect(socket: &UdpSocket, addr: String) {
     let mut len = 0usize;
     buf.write(&mut len, packet.clone()).unwrap();
 
-    println!("\tSending ConnectPacket for a new client\n");
+    // println!("\tSending ConnectPacket for a new client\n");
     socket
         .send_to(&buf.as_mut(), addr)
         .expect("Couldn't send to broker");
@@ -37,7 +41,7 @@ fn send_sub(topic_name: String, packet_num: &u16, socket: &UdpSocket, addr: Stri
         .expect("Can't strip");
     if topic.parse::<u16>().is_err() {
         // make sub packet
-        println!("Is a string {}", topic);
+        // println!("Is a string {}", topic);
         packet = Message::Subscribe(Subscribe {
             flags: Flags::default(),
             msg_id: p_num,
@@ -53,7 +57,7 @@ fn send_sub(topic_name: String, packet_num: &u16, socket: &UdpSocket, addr: Stri
             topic: match topic.parse::<u16>() {
                 Ok(num) => {
                     // is a number
-                    println!("Is a number {}", num);
+                    // println!("Is a number {}", num);
                     TopicNameOrId::Id(num as u16)
                 }
                 Err(_n) => {
@@ -71,7 +75,7 @@ fn send_sub(topic_name: String, packet_num: &u16, socket: &UdpSocket, addr: Stri
     buf.write(&mut len, packet).unwrap();
 
     // send it
-    println!("\tSending SubscribePacket for topic: {}", topic);
+    // println!("\tSending SubscribePacket for topic: {}", topic);
     socket
         .send_to(&buf.as_mut(), addr)
         .expect("Couldn't send to broker");
@@ -93,7 +97,7 @@ fn send_pub(args: String, packet_num: &u16, socket: &UdpSocket, addr: String) ->
         flags: Flags::default(),
         topic_id: topic_id,
         msg_id: p_num,
-        data: PublishData::from(content.strip_suffix("\n").expect("Can't strip").trim()),
+        data: PublishData::from(content.trim()), // .strip_suffix("\n").expect("Can't strip")
     });
 
     // encode it
@@ -102,7 +106,7 @@ fn send_pub(args: String, packet_num: &u16, socket: &UdpSocket, addr: String) ->
     buf.write(&mut len, packet).expect("Didn't write to buffer");
 
     // send it
-    println!("\tSending PublishPacket for topic '{}'", topic_id);
+    // println!("\tSending PublishPacket for topic '{}'", topic_id);
     socket
         .send_to(&buf.as_mut(), addr)
         .expect("Couldn't send to broker");
@@ -182,7 +186,6 @@ fn main() -> io::Result<()> {
         io::stdin()
             .read_line(&mut input)
             .expect("Failed to read from stdin");
-        // if input.as_bytes() == "\n".as_bytes() {continue;}
 
         // add logic for calling the functions
         if !input.is_empty() {
@@ -233,10 +236,7 @@ fn main() -> io::Result<()> {
                 println!("\tConnect Ack packet received: {:?}\n", m.code);
             }
             Message::SubAck(m) => {
-                println!(
-                    "\tSubscribe Ack packet received: {:?}\n\tTopic id: {}",
-                    m.code, m.topic_id
-                );
+                println!( "\tSubscribe Ack packet received: {:?}\n\tTopic id: {}", m.code, m.topic_id);
             }
             Message::PubAck(m) => {
                 println!("\tPublish Ack packet received: {:?}\n", m.code);

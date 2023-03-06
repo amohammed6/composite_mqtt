@@ -708,7 +708,7 @@ mod tests {
         };
 
         // unsubscribe to the topic
-        // println!("Unsubscribing");
+        println!("Unsubscribing");
         let unsub_p = Unsubscribe {
             flags,
             msg_id: 02,
