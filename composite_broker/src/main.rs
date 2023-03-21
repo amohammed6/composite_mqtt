@@ -10,7 +10,7 @@ use std::{
     time::Duration,
 }; 
 
-const NUM_THREADS: u16 = 2;
+const NUM_THREADS: u16 = 0;
 
 fn handle_packets(
     broker: &mut MBroker,
@@ -21,6 +21,7 @@ fn handle_packets(
 ) {
     match decode {
         Message::Connect(p) => {
+            println!("Accepting client at {}", addr.to_string());
             let ret_p = broker.accept_connect(addr.to_string(), p); // returns ack
             // encode and write to buffer
             let mut ret_buf = [0u8; 128]; // will contain encoded bytes
@@ -73,7 +74,7 @@ fn thread_fn(
         match socket.recv_from(&mut buf) {
             // receive the message into buffer
             Ok((_, src)) => {
-                println!("Handling incoming from {}", src);
+                //println!("Handling incoming from {}", src);
 
                 let thread_broker = broker.clone();
                 let thread_subs = sub_list.clone(); 
@@ -87,21 +88,16 @@ fn thread_fn(
                             // encode the ack packet and the publish packet again
                             let client_list = &res.2;
                             let (mut ack_buf, mut pub_buf) = ([0u8; 128], [0u8; 128]);
-                            ack_buf
-                                .write(&mut 0, res.0)
-                                .expect("Didn't write to buffer");
+
                             pub_buf
                                 .write(&mut 0, res.1)
                                 .expect("Didn't write to buffer");
 
-                            // send the ack packet to this client
-                            socket
-                                .send_to(&ack_buf.as_mut(), src)
-                                .expect("Failed to send to client");
+                            /* QOS 0: we dont PUBACK */
 
                             // send the publish packet to the client list
                             for cli in client_list {
-                                println!("Sending to client...{}", cli);
+                                //println!("Sending to client...{}", cli);
                                 socket
                                     .send_to(&pub_buf.as_mut(), cli)
                                     .expect("Failed to send to subscriber");
@@ -111,11 +107,9 @@ fn thread_fn(
                     _ => {
                         if let Ok(mut b) = thread_broker.lock() {
                             handle_packets(&mut b, &socket, decode, src, thread_subs);
-                            thread::sleep(Duration::from_millis(750));
                         }
                     }
                 }
-                thread::sleep(Duration::from_millis(750));
             }
             Err(e) => {
                 eprintln!("Couldn't receive a datagram {}", e);
@@ -146,12 +140,16 @@ fn main() ->  io::Result<()>{
         let sock = socket.try_clone().expect("Failed to clone socket"); // use socket clone to send to client
 
         // allow the thread to handle & send the packets
-        let thread_handle = thread::spawn( move || {
+        let _t = thread::spawn( move || {
             thread_fn(&mut thread_broker, thread_subs, &sock, buf);
         } );
 
-        thread_handle.join().unwrap()
     }
+
+    /* lets not waste this thread... */
+    let mut thread_broker = broker.clone();
+    let buf = [0u8; 128];
+    thread_fn(&mut thread_broker, sub_list, &socket, buf);
     
     Ok(())
 }

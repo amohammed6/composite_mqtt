@@ -123,7 +123,7 @@ pub mod broker {
             if cli.client_id.trim().is_empty() {
                 let sub_ack = Message::SubAck(SubAck {
                     flags: packet.flags,
-                    msg_id: self.num_packets,
+                    msg_id: packet.msg_id,
                     topic_id: match packet.topic {
                         mqtt_sn::TopicNameOrId::Name(_) => 0,
                         mqtt_sn::TopicNameOrId::Id(id) => id,
@@ -176,7 +176,7 @@ pub mod broker {
             }
             Message::SubAck(SubAck {
                 flags: Flags::default(),
-                msg_id: self.num_packets,
+                msg_id: packet.msg_id,
                 topic_id: topic,
                 code: ReturnCode::Accepted,
             })

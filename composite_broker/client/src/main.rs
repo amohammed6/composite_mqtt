@@ -194,21 +194,21 @@ fn main() -> io::Result<()> {
                     input.strip_prefix("mqtt_").expect("Couldn't strip").to_string(), 
                     &packet_num, 
                     &sock, 
-                    "10.10.1.2:47138".to_string())
+                    "10.10.1.2:8888".to_string())
             }
             else if input.contains("sub") {
                 packet_num = send_sub(
                     input.strip_prefix("mqtt_").expect("Couldn't strip").to_string(),
                     &packet_num, 
                     &sock, 
-                    "10.10.1.2:47138".to_string());
+                    "10.10.1.2:8888".to_string());
             }
             else if input.contains("pub") {
                 packet_num = send_pub(
                     input.strip_prefix("mqtt_").expect("Couldn't strip").to_string(), 
                     &packet_num, 
                     &sock, 
-                    "10.10.1.2:47138".to_string());
+                    "10.10.1.2:8888".to_string());
             }
         }
 
