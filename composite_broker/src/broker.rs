@@ -135,24 +135,28 @@ pub mod broker {
             }
 
             // check if topic is in list
-            let mut topic = 0;
+            let mut topic = 1;
             match packet.topic {
                 mqtt_sn::TopicNameOrId::Id(id) => topic = id,
                 mqtt_sn::TopicNameOrId::Name(name) => {
-                    // get the current counter
-                    let mut num = self.topic_counter.deref().get();
-                    // if the topic id is already assigned, increase
-                    while sub_list
-                        .subscription_list
-                        .contains_key(&u16::try_from(num).unwrap())
-                    {
-                        num = self.topic_counter.inc();
+                    if self.topicname_id_pairs.contains_key(&name.clone().to_string()) {
+                        topic = *self.topicname_id_pairs.get(&name.clone().to_string()).unwrap()
+                    } else {
+                        // get the current counter
+                        let mut num = self.topic_counter.deref().get();
+                        // if the topic id is already assigned, increase
+                        while sub_list
+                            .subscription_list
+                            .contains_key(&u16::try_from(num).unwrap())
+                        {
+                            num = self.topic_counter.inc();
+                        }
+                        //add to pairs list
+                        self.topicname_id_pairs
+                            .insert(name.clone().to_string(), u16::try_from(num).unwrap());
+                        // set the value
+                        topic = u16::try_from(num).unwrap();
                     }
-                    //add to pairs list
-                    self.topicname_id_pairs
-                        .insert(name.clone().to_string(), u16::try_from(num).unwrap());
-                    // set the value
-                    topic = u16::try_from(num).unwrap()
                 }
             };
             match sub_list.subscription_list.get_mut(&topic) {

@@ -6,16 +6,18 @@ use mqtt_sn::{
 };
 use std::borrow::Borrow;
 use std::io::{self};
-use std::time::{Instant}; // Duration
+use std::time::{SystemTime}; // Duration
 use std::net::UdpSocket; 
 use std::{env, str};
+use std::{thread, time};
+use std::sync::{Arc, Mutex};
 
-fn send_connect(socket: &UdpSocket, addr: String) {
+fn send_connect(socket: &UdpSocket, addr: String, client_id: String) {
     // make connect packet
     let packet = Message::Connect(Connect {
         flags: Flags::default(),
         duration: 30,
-        client_id: ClientId::from("bench"),
+        client_id: ClientId::from(&client_id[..]),
     });
 
     // encode it
@@ -75,17 +77,16 @@ fn send_sub(topic: String, packet_num: &u16, socket: &UdpSocket, addr: String) -
     p_num + 1
 }
 
-fn send_pub(topic_id: u16, data: String, packet_num: &u16, socket: &UdpSocket, addr: String) -> u16 {
+fn send_pub(topic_id: u16, data: String, packet_num: u8, socket: &UdpSocket, addr: String) {
     // (u16, [u8; 128])
     let content: &str = &data;
-    let p_num = *packet_num;
-    println!("{}", p_num);
+    let data = [packet_num];
     // make publish packet
     let packet = Message::Publish(Publish {
         flags: Flags::default(),
         topic_id: topic_id,
-        msg_id: p_num,
-        data: PublishData::from(content.trim()), // .strip_suffix("\n").expect("Can't strip")
+        msg_id: 0,
+        data: PublishData::from(str::from_utf8(&data).unwrap()), // .strip_suffix("\n").expect("Can't strip")
     });
 
     // encode it
@@ -98,44 +99,6 @@ fn send_pub(topic_id: u16, data: String, packet_num: &u16, socket: &UdpSocket, a
     socket
         .send_to(&buf.as_mut(), addr)
         .expect("Couldn't send to broker");
-    p_num + 1
-}
-
-fn send_unsub(topic_name: String, packet_num: &u16, socket: &UdpSocket, addr: String) -> u16 {
-    let p_num = *packet_num;
-    let topic = topic_name
-        .strip_prefix("unsub ")
-        .expect("Couldn't strip")
-        .strip_suffix("\n")
-        .expect("Can't strip");
-
-    // make the unsub packet
-    let packet = Message::Unsubscribe(Unsubscribe {
-        flags: match topic.parse::<u16>() {
-            Ok(_) => {
-                let mut flags = Flags::default();
-                flags.set_topic_id_type(0x2); // necessary for topic_id
-                flags
-            }
-            Err(_) => Flags::default(),
-        },
-        msg_id: p_num,
-        topic: match topic.parse::<u16>() {
-            Ok(num) => TopicNameOrId::Id(num as u16),
-            Err(_n) => TopicNameOrId::Name(topic.into()),
-        },
-    });
-    let mut buf = [0u8; 128]; // create buffer for encoding
-    let mut len = 0usize;
-    buf.write(&mut len, packet).unwrap();
-
-    // send it
-    println!("\tSending SubscribePacket for topic: {}", topic);
-    socket
-        .send_to(&buf.as_mut(), addr)
-        .expect("Couldn't send to broker");
-
-    p_num + 1
 }
 
 fn read_publish_packet(buf: [u8; 512]) {
@@ -150,24 +113,66 @@ fn read_publish_packet(buf: [u8; 512]) {
     }
 }
 
+fn recv_thread(socket: &UdpSocket, recv_time: &mut Arc<Mutex<&mut [u64;100]>>) {
+    let mut ack_buffer = [0u8; 512];
 
-/*
-    I change the port with each run
-    Run with
-        cargo run -- 127.0.0.1 8000
-        cargo run -- 127.0.0.1 7878
-*/
+    for i in 0..100 {
+        // receive from broker
+        socket
+            .recv_from(&mut ack_buffer.as_mut())
+            .expect("Could not read into buffer");
+
+        // check that the received bytes are the ack packet and decode
+        let p: Message = ack_buffer.read(&mut 0).unwrap();
+        match p {
+            Message::Publish(m) => {
+                let id = m.data.as_bytes()[0];
+                let mut times = recv_time.lock().unwrap();
+                times[id as usize] = SystemTime::now()
+                    .duration_since(SystemTime::UNIX_EPOCH)
+                    .unwrap()
+                    .as_millis() as u64;
+            }
+            _ => {
+                println!("Publish packet not received");
+            }
+        }
+
+        if i % 10 == 0 {
+            println!("Received {} Messages", i);
+        }
+    }
+}
+
+fn create_client(broker: &str, client_id: String) {
+    let socket = UdpSocket::bind("0.0.0.0:0".to_string()).expect("Could not bind client socket");
+    let packet_num = 1;
+
+    send_connect(&socket, broker.to_string(), client_id);
+    send_sub(
+        "topic1".to_string(),
+        &packet_num, 
+        &socket, 
+        broker.to_string());
+}
+
 
 fn main() {
-    let broker = "10.10.1.2:8888";
-    let mut packet_num = 1;
+    let packet_num = 1;
     let args: Vec<String> = env::args().collect(); // collect address from command line
-    let bind_addr = args[1].clone() + ":" + args[2].borrow(); // concatenate to make the socket addr
-    let mut ack_buffer = [0u8; 512];
+    let bind_addr = "0.0.0.0:0";
+    let broker = args[2].borrow();
+    let num_clients: i32 = args[1].to_string().parse().unwrap(); // concatenate to make the socket addr
     let mut topic_id: u16 = 0;
+    let mut ack_buffer = [0u8; 512];
+
+    for i in 0..num_clients {
+        create_client(broker, format!("client{}", i));
+        println!("Created Client {}", i);
+    }
 
     let socket = UdpSocket::bind(bind_addr).expect("Could not bind client socket");
-    send_connect(&socket, broker.to_string());
+    send_connect(&socket, broker.to_string(), "bench".to_string());
 
     socket
         .recv_from(&mut ack_buffer.as_mut())
@@ -184,7 +189,7 @@ fn main() {
         }
     }
 
-    packet_num = send_sub(
+    send_sub(
         "topic1".to_string(),
         &packet_num, 
         &socket, 
@@ -193,6 +198,16 @@ fn main() {
     socket
         .recv_from(&mut ack_buffer.as_mut())
         .expect("Could not read into buffer");
+
+
+
+    let mut times = [0u64;100];
+    let recv_time = Arc::new(Mutex::new(&mut times));
+
+    let sock = socket.try_clone().expect("Failed to clone socket");
+    let _t = thread::spawn( move || {
+        recv_thread(&sock, &mut recv_time.clone());
+    } );
 
     let p: Message = ack_buffer.read(&mut 0).unwrap();
     match p {
@@ -205,36 +220,25 @@ fn main() {
         }
     }
 
-    let bench_time = Instant::now();
-
-    for i in 0..1000 {
+    for i in 0..100 {
         let sock = socket.try_clone().expect("Failed to clone socket");
 
-
-        packet_num = send_pub(
+        send_pub(
             topic_id,
             "topic1:test".to_string(),
-            &mut 0,
+            i,
             &sock,
             broker.to_string()
         );
 
-        // receive from broker
-        socket
-            .recv_from(&mut ack_buffer.as_mut())
-            .expect("Could not read into buffer");
-
-        // check that the received bytes are the ack packet and decode
-        let p: Message = ack_buffer.read(&mut 0).unwrap();
-        match p {
-            Message::Publish(_m) => {
-                read_publish_packet(ack_buffer);
-            }
-            _ => {
-                println!("Publish packet not received");
-            }
+        if i % 10 == 0 {
+            println!("Sent {} Messages", i);
         }
     }
 
-    println!("AVG Round-trip time: {:.2?}", bench_time.elapsed()/1000);
+    let sleep_t = time::Duration::from_millis(2000);
+    thread::sleep(sleep_t);
+
+    //println!("times {:?}", &mut times);
+    //println!("AVG Round-trip time: {:.2?}",;
 }

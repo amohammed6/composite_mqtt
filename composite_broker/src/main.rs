@@ -19,6 +19,7 @@ fn handle_packets(
     addr: SocketAddr,
     sub_list: Subscriptions,
 ) {
+    let mut len = 0usize;
     match decode {
         Message::Connect(p) => {
             println!("Accepting client at {}", addr.to_string());
@@ -26,26 +27,27 @@ fn handle_packets(
             // encode and write to buffer
             let mut ret_buf = [0u8; 128]; // will contain encoded bytes
             ret_buf
-                .write(&mut 0, ret_p)
+                .write(&mut len, ret_p)
                 .expect("Didn't write to buffer"); // write to the buffer
             
             // send the ack packet to this client
+            let send_buf = &mut ret_buf[..len];
             socket
-                .send_to(&ret_buf.as_mut(), addr)
+                .send_to(send_buf, addr)
                 .expect("Failed to send a response");
         }
         Message::Subscribe(p) => {
             let ret_p = broker.accept_sub(addr.to_string(), p, sub_list);
-            
             // encode and write to buffer
             let mut ret_buf = [0u8; 128]; // will contain encoded bytes
             ret_buf
-                .write(&mut 0, ret_p)
+                .write(&mut len, ret_p)
                 .expect("Didn't write to buffer"); // write to the buffer
             
             // send the ack packet to this client
+            let send_buf = &mut ret_buf[..len];
             socket
-                .send_to(&ret_buf.as_mut(), addr)
+                .send_to(send_buf, addr)
                 .expect("Failed to send to client");
         }
         Message::Unsubscribe(p) => {
@@ -89,18 +91,21 @@ fn thread_fn(
                             let client_list = &res.2;
                             let (mut ack_buf, mut pub_buf) = ([0u8; 128], [0u8; 128]);
 
+                            let mut len = 0usize;
                             pub_buf
-                                .write(&mut 0, res.1)
+                                .write(&mut len, res.1)
                                 .expect("Didn't write to buffer");
 
                             /* QOS 0: we dont PUBACK */
 
                             // send the publish packet to the client list
-                            for cli in client_list {
-                                //println!("Sending to client...{}", cli);
+                            let send_buf = &mut pub_buf[..len];
+                            let mut i = 0usize;
+                            while i < client_list.len() {
                                 socket
-                                    .send_to(&pub_buf.as_mut(), cli)
+                                    .send_to(send_buf, &client_list[i])
                                     .expect("Failed to send to subscriber");
+                                i += 1;
                             }
                         }
                     }
