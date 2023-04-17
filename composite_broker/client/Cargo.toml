@@ -1,14 +1,14 @@
 [package]
-name = "composite_broker"
+name = "client"
 version = "0.1.0"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+mqtt-v5 = "0.1.1"
+bytes = "0.5.4"
 mqtt-sn = "0.2.2"
 byte = "0.2"
-dashmap = "5.4.0"
-assert_hex = "0.2.2"
-atomic-counter = "1.0.1"
-
+hex = "0.3.1"
+chrono = "0.4.23"
