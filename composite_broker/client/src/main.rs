@@ -97,7 +97,7 @@ fn send_pub(args: String, packet_num: &u16, socket: &UdpSocket, addr: String) ->
         flags: Flags::default(),
         topic_id: topic_id,
         msg_id: p_num,
-        data: PublishData::from(content.trim()), // .strip_suffix("\n").expect("Can't strip")
+        data: PublishData::from(content.trim()), // 
     });
 
     // encode it
@@ -106,7 +106,6 @@ fn send_pub(args: String, packet_num: &u16, socket: &UdpSocket, addr: String) ->
     buf.write(&mut len, packet).expect("Didn't write to buffer");
 
     // send it
-    // println!("\tSending PublishPacket for topic '{}'", topic_id);
     socket
         .send_to(&buf.as_mut(), addr)
         .expect("Couldn't send to broker");
@@ -162,13 +161,11 @@ fn read_publish_packet(buf: [u8; 1500]) {
     }
 }
 
-/*
-    I change the port with each run
-    Run with
-        cargo run -- 127.0.0.1 8000
-        cargo run -- 127.0.0.1 7878
-*/
-
+/// Instructions to run 
+/// I change the port with each run
+/// Run with
+///     cargo run -- 127.0.0.1 8000
+///     cargo run -- 127.0.0.1 7878
 fn main() -> io::Result<()> {
     let mut packet_num = 00;
     let args: Vec<String> = env::args().collect(); // collect address from command line

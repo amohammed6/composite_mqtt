@@ -34,12 +34,14 @@ pub mod broker {
     }
 
     impl Subscriptions {
+        /// creates a Dashmap list of subscribers, protected by an Arc (Atomically Reference Counted)
         pub fn new() -> Self {
             Subscriptions {
                 subscription_list: Arc::new(DashMap::new()),
             }
         }
 
+        /// A helper function to print the subscription list 
         #[allow(dead_code)]
         pub fn get_sub_list(&mut self) {
             println!("\tPrinting current topic-client...");
@@ -55,14 +57,14 @@ pub mod broker {
     pub struct MBroker {
         num_packets: u16,
         num_clients: u64,
-        topic_counter: Arc<RelaxedCounter>,
+        topic_counter: Arc<RelaxedCounter>,     // Arc protected Atomic counter for cross thread support
         client_list: Vec<Client>,
-        topicname_id_pairs: HashMap<String, u16>,
+        topicname_id_pairs: HashMap<String, u16>, // topics registered as names and assigned IDs as pairs are stored
     }
 
     #[allow(dead_code)]
     impl MBroker {
-        // make a new Broker
+        /// Establishes all the tracking variables of the broker
         pub fn new() -> Self {
             Self {
                 num_packets: 2000, // arbitrarily chosen value to begin counting from
@@ -71,12 +73,14 @@ pub mod broker {
                 client_list: Vec::new(),
                 topicname_id_pairs: HashMap::new(),
             }
-        } // end new
+        }
 
+        /// Accepts the address and the packet of the CONNECT packet and returns a CONN_ACK packet
         pub fn accept_connect(&mut self, addr: String, _connect_packet: Connect) -> Message {
             let addr_port: Vec<&str> = addr.split(":").collect();
             // error checking that client isn't already connected
             if self.find_client_by_address(addr_port[0], addr_port[1]) {
+                // create and return a connect_ack packet on failure
                 let packet = Message::ConnAck(ConnAck {
                     code: ReturnCode::Rejected(RejectedReason::Congestion),
                 });
@@ -93,7 +97,7 @@ pub mod broker {
             // add to client list
             self.client_list.push(c);
 
-            // create connect_ack packet
+            // create connect_ack packet on success
             let conn_ack = Message::ConnAck(ConnAck {
                 code: ReturnCode::Accepted,
             });
@@ -101,7 +105,7 @@ pub mod broker {
             conn_ack
         } // end connect
 
-        // accept a subscribe packet -> (Packet, Option<Vec<String>>)
+        /// Accepts the address, the SUBSCRIBE packet, and the subscription list for access, and returns a SUB_ACK packet
         #[allow(unused_assignments)]
         pub fn accept_sub(
             &mut self,
@@ -112,6 +116,7 @@ pub mod broker {
             self.num_packets += 1;
             let addr_port: Vec<&str> = addr.split(":").collect();
             let mut cli: Client = Client::new(String::new(), String::new(), String::new());
+            
             // find the client in reference
             for client in &self.client_list {
                 if client.address.eq(&addr_port[0].to_string()) {
@@ -119,8 +124,9 @@ pub mod broker {
                 }
             }
 
-            // if not found
+            // if the client isn't known to the broker, return
             if cli.client_id.trim().is_empty() {
+                // return a SUB_ACK packet on failure
                 let sub_ack = Message::SubAck(SubAck {
                     flags: packet.flags,
                     msg_id: self.num_packets,
@@ -134,7 +140,7 @@ pub mod broker {
                 return sub_ack;
             }
 
-            // check if topic is in list
+            // check if topic is in subscription list list
             let mut topic = 0;
             match packet.topic {
                 mqtt_sn::TopicNameOrId::Id(id) => topic = id,
@@ -155,7 +161,10 @@ pub mod broker {
                     topic = u16::try_from(num).unwrap()
                 }
             };
+
+            // adding to the subscription list
             match sub_list.subscription_list.get_mut(&topic) {
+                // if the topic is already in the list, push to the topic's vector
                 Some(mut entry) => {
                     entry.push(Client {
                         client_id: cli.client_id.clone(),
@@ -163,6 +172,7 @@ pub mod broker {
                         port: addr_port[1].to_string(),
                     });
                 }
+                // if the topic is not in the list, insert the topic into the list and create a new topic vector
                 None => {
                     sub_list.subscription_list.insert(
                         topic,
@@ -174,6 +184,8 @@ pub mod broker {
                     );
                 }
             }
+
+            // return a SUB_ACK on success
             Message::SubAck(SubAck {
                 flags: Flags::default(),
                 msg_id: self.num_packets,
@@ -182,19 +194,22 @@ pub mod broker {
             })
         } // end subscribe
 
-        // return the client address (String) and the publish ack packet
+        /// Accepts the address, PUB_ACK packet, and access to the subscription list
+        /// Return the PUB_ACK, PUBLISH packet, and the list of addresses to publish to
         pub fn accept_pub(
             &mut self,
             addr: String,
             packet: Publish,
             sub_list: Subscriptions,
         ) -> (Message, Message, Vec<String>) {
-            // Arc<DashMap<u16, Vec<Client>>>
+           
             self.num_packets += 1;
             let addr_port: Vec<&str> = addr.split(":").collect();
             let pub_p = Message::Publish(Publish { ..packet.clone() });
 
+            // if the client isn't known to the broker, return
             if !self.find_client_by_address(addr_port[0], addr_port[1]) {
+                // return a PUB_ACK 
                 let ack = Message::PubAck(PubAck {
                     topic_id: packet.topic_id,
                     msg_id: self.num_packets,
@@ -224,7 +239,7 @@ pub mod broker {
                 }
             }
 
-            // make the ack packet
+            // if the topic is in the subscription list, return the appropriate ack and publish packets, and the clients list
             if found {
                 let ack = Message::PubAck(PubAck {
                     topic_id: packet.topic_id,
@@ -243,6 +258,8 @@ pub mod broker {
             }
         } // end publish
 
+        /// Accepts the address, the UNSUB packet, and access to the subscription list
+        /// Return the UNSUB ACK 
         pub fn accept_unsub(
             &mut self,
             addr: String,
@@ -251,7 +268,7 @@ pub mod broker {
         ) -> Message {
             self.num_packets += 1;
             let addr_port: Vec<&str> = addr.split(":").collect();
-            // find the topic
+            // extract the topic from the packet
             let topic = match &packet.topic {
                 mqtt_sn::TopicNameOrId::Id(id) => id,
                 mqtt_sn::TopicNameOrId::Name(name) => {
@@ -263,8 +280,10 @@ pub mod broker {
             };
             let top = sub_list.subscription_list.get_mut(topic);
 
+            // locate the topic in the subscription list
             match top {
                 Some(mut list) => {
+                    // create a holder Client to hold the removed subscription
                     let mut removed: Client = Client {
                         client_id: "0".to_string(),
                         address: "0".to_string(),
@@ -273,20 +292,21 @@ pub mod broker {
                     // find the client in the topic list
                     let mut i = 0;
                     for client in list.value() {
+                        // find the address of our client in the topic's subscription list
                         if client.address == addr_port[0] && client.port == addr_port[1] {
                             removed = list.remove(i);
                             break;
                         }
                         i += 1;
                     }
-                    // check if you found the client in the topic list
+                    // ERROR CHECK: check if you found the client in the topic list
                     if removed.client_id == "0".to_string() {
                         return Message::UnsubAck(UnsubAck {
                             msg_id: self.num_packets,
                             code: ReturnCode::Rejected(RejectedReason::InvalidTopicId),
                         });
                     } else {
-                        // if it's the last one, remove the topic
+                        // TODO: if it's the last one, remove the topic
                         if list.value().len() == 0 {
                             // list.key()
                             // let it = sub_list.subscription_list.remove(topic);
@@ -294,6 +314,7 @@ pub mod broker {
                         }
                     }
                 }
+                // if topic not found, return UNSUB_ACK with failure
                 None => {
                     return Message::UnsubAck(UnsubAck {
                         msg_id: self.num_packets,
@@ -301,7 +322,7 @@ pub mod broker {
                     })
                 }
             }
-
+            // return UNSUB_ACK with success
             Message::UnsubAck(UnsubAck {
                 msg_id: packet.msg_id,
                 code: ReturnCode::Accepted,
@@ -311,6 +332,7 @@ pub mod broker {
         /*
             HELPER FUNCTION
         */
+        /// print the list of clients known to the broker
         pub fn get_client_list(&mut self) {
             println!(
                 "\tPrinting current client list...\n\t{:?}\n",
@@ -318,6 +340,8 @@ pub mod broker {
             )
         }
 
+        /// locate if a client is in the client list
+        /// return true if found, return false if not
         fn find_client_by_address(&mut self, addr: &str, port: &str) -> bool {
             for cl in &self.client_list {
                 if cl.address == addr.to_string() && cl.port == port.to_string() {
