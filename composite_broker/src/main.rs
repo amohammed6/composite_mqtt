@@ -12,6 +12,8 @@ use std::{
 
 const NUM_THREADS: u16 = 0;
 
+/// Accepts access to the Broker instance, the UDP socket, the subscription list, client address, and the packet 
+/// This function deals with only CONNECT, SUBSCRIBE, and UNSUBSCRIBE packets, because they can be handled individually
 fn handle_packets(
     broker: &mut MBroker,
     socket: &UdpSocket,
@@ -19,11 +21,14 @@ fn handle_packets(
     addr: SocketAddr,
     sub_list: Subscriptions,
 ) {
+
     let mut len = 0usize;
     match decode {
+        // connect the client to the Broker
         Message::Connect(p) => {
             println!("Accepting client at {}", addr.to_string());
             let ret_p = broker.accept_connect(addr.to_string(), p); // returns ack
+            
             // encode and write to buffer
             let mut ret_buf = [0u8; 128]; // will contain encoded bytes
             ret_buf
@@ -36,6 +41,7 @@ fn handle_packets(
                 .send_to(send_buf, addr)
                 .expect("Failed to send a response");
         }
+        // subscribe a client to a topic
         Message::Subscribe(p) => {
             let ret_p = broker.accept_sub(addr.to_string(), p, sub_list);
             // encode and write to buffer
@@ -50,6 +56,7 @@ fn handle_packets(
                 .send_to(send_buf, addr)
                 .expect("Failed to send to client");
         }
+        // unsubscribe a client to a topic
         Message::Unsubscribe(p) => {
             let res = broker.accept_unsub(addr.to_string(), p, sub_list);
             
@@ -66,6 +73,9 @@ fn handle_packets(
     };
 }
 
+/// Accepts an Arc and Mutex protected Broker instance, access to the subscription list, socket, and buffer for the socket
+/// This function deals with the PUBLISH packet, to allow for the system to handle multiple PUBLISH requests at once.
+/// All other packets get redirected to handle_packets() from here.
 fn thread_fn(
     broker: &mut Arc<Mutex<MBroker>>,
     sub_list: Subscriptions,
@@ -78,16 +88,23 @@ fn thread_fn(
             Ok((_, src)) => {
                 //println!("Handling incoming from {}", src);
 
+                // clone the Broker instance and the subscription list prior to taking the lock on the Broker's mutex
                 let thread_broker = broker.clone();
                 let thread_subs = sub_list.clone(); 
                 let decode: Message = buf.read(&mut 0).unwrap(); // decode and pass it in
 
                 match decode {
+                    // publish a packet to subscribers
                     Message::Publish(p) => {
+                        // take a lock on the Broker's mutex
                         if let Ok(mut b) = thread_broker.lock() {
+                            // make the accept_pub() call to receive 
+                            //      1) the PUB_ACK packet to send back to the publisher client
+                            //      2) the PUBLISH packet that will go out to the subscribers
+                            //      3) a list of the subscribers' addresses to receive the publish packet
                             let res = b.accept_pub(src.to_string(), p, thread_subs);
-
-                            // encode the ack packet and the publish packet again
+                            
+                            // encode the PUB_ACK packet and the PUBLISH packet again
                             let client_list = &res.2;
                             let (mut ack_buf, mut pub_buf) = ([0u8; 128], [0u8; 128]);
 
@@ -102,6 +119,7 @@ fn thread_fn(
                             let send_buf = &mut pub_buf[..len];
                             let mut i = 0usize;
                             while i < client_list.len() {
+
                                 socket
                                     .send_to(send_buf, &client_list[i])
                                     .expect("Failed to send to subscriber");
@@ -110,6 +128,7 @@ fn thread_fn(
                         }
                     }
                     _ => {
+                        // For any other packet type, redirect to handle_packets()
                         if let Ok(mut b) = thread_broker.lock() {
                             handle_packets(&mut b, &socket, decode, src, thread_subs);
                         }
@@ -123,6 +142,7 @@ fn thread_fn(
     }
 }
 
+/// Run the broker with `cargo run` in one terminal and monitor it for success and failure statements
 fn main() ->  io::Result<()>{
     // make UDP socket
     let socket = UdpSocket::bind("0.0.0.0:8888").expect("Could not bind socket");
@@ -136,7 +156,7 @@ fn main() ->  io::Result<()>{
     let broker = Mutex::new(broker);
     let broker = Arc::new(broker);
 
-
+    // provide a finite number of threads to handle packet requests
     for _t in 0..NUM_THREADS {
         // intialize thread resources
         let mut thread_broker = broker.clone();
@@ -176,6 +196,7 @@ mod tests {
     static ADDR2: &str = "192.0.0.1:7777";
 
     #[test]
+    /// Test encoding, decoding, and parsing PUBLISH packets
     fn test_read_publish_packet() {
         let mut bytes = [0u8; 20];
         let mut len = 0usize;
@@ -200,6 +221,7 @@ mod tests {
     }
 
     #[test]
+    /// Test encoding a SUBSCRIBE packet with a topic id. Note: flags sets the topic id type to (0x2)
     fn subscribe_encode_parse_id() {
         let mut bytes = [0u8; 20];
         let mut len = 0usize;
@@ -217,6 +239,7 @@ mod tests {
     }
 
     #[test]
+    /// Test encoding, decoding, and parsing a SUBSCRIBE packet
     fn test_read_subscribe_packet() {
         let mut bytes = [0u8; 20];
         let mut len = 0usize;
@@ -234,14 +257,14 @@ mod tests {
         assert_eq!(connect_packet, decode);
         match decode {
             Message::Subscribe(m) => {
-                // assert_eq!(mqtt_sn::TopicNameOrId::Id(30), m.topic);
-                println!("{:?}", m.topic);
+                assert_eq!(mqtt_sn::TopicNameOrId::Id(30), m.topic);
             }
             _ => {}
         }
     }
 
     #[test]
+    /// Test encoding, decoding, and parsing a CONNECT packet
     fn test_read_connect_packet() {
         let mut bytes = [0u8; 20];
         let mut len = 0usize;
@@ -263,6 +286,7 @@ mod tests {
     }
 
     #[test]
+    /// Test connecting a packet to a Broker instance 
     fn test_new_client1() {
         let mut broker = MBroker::new();
         let id = "1004";
@@ -284,6 +308,7 @@ mod tests {
     }
 
     #[test]
+    /// Test connecting two packets to a Broker instance
     fn test_new_client2() {
         let mut broker = MBroker::new();
         // Create two Connect packet
@@ -318,13 +343,15 @@ mod tests {
     }
 
     #[test]
+    /// Test connecting and subscribing a packet with a topic id 
     fn test_new_sub_id() {
         let sub_list = Subscriptions::new();
         let mut broker = MBroker::new();
         let id = "1004";
         let mut flags = Flags::default();
         flags.set_topic_id_type(0x2); // topic_id
-                                      // Create a Connect packet
+        
+        // Create a Connect packet
         let conn_p = Connect {
             flags: Flags::default(),
             duration: 30,
@@ -353,6 +380,7 @@ mod tests {
     }
 
     #[test]
+    /// Test connecting and subscribing a packet with a topic name
     fn test_new_sub_name() {
         let sub_list = Subscriptions::new();
         let mut broker = MBroker::new();
@@ -386,6 +414,7 @@ mod tests {
     }
 
     #[test]
+    /// Test connecting and subscribing multiple packets of topic names and Ids from one client
     fn test_multiple_subs_names_ids() {
         let sub_list = Subscriptions::new();
         let mut broker = MBroker::new();
@@ -437,6 +466,7 @@ mod tests {
     }
 
     #[test]
+    /// Test connecting and subscribing multiple packets of topic names from one client
     fn test_multiple_subs_gwu() {
         let sub_list = Subscriptions::new();
         let mut broker = MBroker::new();
@@ -504,6 +534,7 @@ mod tests {
     }
 
     #[test]
+    /// Test connecting and subscribing multiple packets of topic names from one client
     fn test_multiple_subs_unis() {
         let sub_list = Subscriptions::new();
         let mut broker = MBroker::new();
@@ -567,6 +598,7 @@ mod tests {
     }
 
     #[test]
+    /// Test connecting, subscribing with topic name, and publishing from one client
     fn test_new_pub() {
         let sub_list = Subscriptions::new();
         let mut broker = MBroker::new();
@@ -621,6 +653,8 @@ mod tests {
     }
 
     #[test]
+    /// Test connecting two clients, and subscribing with topic name from one client
+    ///     and publishing from another client
     fn test_new_pub_2clients() {
         let sub_list = Subscriptions::new();
         let mut broker = MBroker::new();
@@ -684,12 +718,14 @@ mod tests {
     }
 
     #[test]
+    /// Test connecting a client, subscribing to a topic name, and unsubscribing
     fn test_unsub() {
         let sub_list = Subscriptions::new();
         let mut broker = MBroker::new();
         let mut flags = Flags::default();
         flags.set_topic_id_type(0x2); // topic_id
-                                      // Create a client's connect packet
+        
+        // Create a client's connect packet
         let conn_p1 = Connect {
             flags: Flags::default(),
             duration: 30,
@@ -698,7 +734,7 @@ mod tests {
         broker.accept_connect(ADDR.to_string(), conn_p1);
 
         // subscribe to a topic
-        println!("Subscribing...");
+        // println!("Subscribing...");
         let sub_p = Subscribe {
             flags: Flags::default(),
             msg_id: 01,
@@ -730,12 +766,14 @@ mod tests {
     }
 
     #[test]
+    /// Test connecting a client, and subscribing and unsubscribing to a topic
     fn test_unsub_invalid() {
         let sub_list = Subscriptions::new();
         let mut broker = MBroker::new();
         let mut flags = Flags::default();
         flags.set_topic_id_type(0x2); // topic_id
-                                      // Create a client's connect packet
+        
+        // Create a client's connect packet
         let conn_p1 = Connect {
             flags: Flags::default(),
             duration: 30,

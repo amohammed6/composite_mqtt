@@ -113,6 +113,7 @@ fn read_publish_packet(buf: [u8; 512]) {
     }
 }
 
+
 fn recv_thread(socket: &UdpSocket, recv_time: &mut Arc<Mutex<&mut [u64;100]>>) {
     let mut ack_buffer = [0u8; 512];
 
@@ -132,6 +133,7 @@ fn recv_thread(socket: &UdpSocket, recv_time: &mut Arc<Mutex<&mut [u64;100]>>) {
                     .duration_since(SystemTime::UNIX_EPOCH)
                     .unwrap()
                     .as_millis() as u64;
+
             }
             _ => {
                 println!("Publish packet not received");
@@ -142,6 +144,7 @@ fn recv_thread(socket: &UdpSocket, recv_time: &mut Arc<Mutex<&mut [u64;100]>>) {
             println!("Received {} Messages", i);
         }
     }
+
 }
 
 fn create_client(broker: &str, client_id: String) {
