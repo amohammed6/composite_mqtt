@@ -129,7 +129,7 @@ pub mod broker {
                 // return a SUB_ACK packet on failure
                 let sub_ack = Message::SubAck(SubAck {
                     flags: packet.flags,
-                    msg_id: self.num_packets,
+                    msg_id: packet.msg_id,
                     topic_id: match packet.topic {
                         mqtt_sn::TopicNameOrId::Name(_) => 0,
                         mqtt_sn::TopicNameOrId::Id(id) => id,
@@ -140,25 +140,30 @@ pub mod broker {
                 return sub_ack;
             }
 
-            // check if topic is in subscription list list
-            let mut topic = 0;
+            // check if topic is in list
+            let mut topic = 1;
+
             match packet.topic {
                 mqtt_sn::TopicNameOrId::Id(id) => topic = id,
                 mqtt_sn::TopicNameOrId::Name(name) => {
-                    // get the current counter
-                    let mut num = self.topic_counter.deref().get();
-                    // if the topic id is already assigned, increase
-                    while sub_list
-                        .subscription_list
-                        .contains_key(&u16::try_from(num).unwrap())
-                    {
-                        num = self.topic_counter.inc();
+                    if self.topicname_id_pairs.contains_key(&name.clone().to_string()) {
+                        topic = *self.topicname_id_pairs.get(&name.clone().to_string()).unwrap()
+                    } else {
+                        // get the current counter
+                        let mut num = self.topic_counter.deref().get();
+                        // if the topic id is already assigned, increase
+                        while sub_list
+                            .subscription_list
+                            .contains_key(&u16::try_from(num).unwrap())
+                        {
+                            num = self.topic_counter.inc();
+                        }
+                        //add to pairs list
+                        self.topicname_id_pairs
+                            .insert(name.clone().to_string(), u16::try_from(num).unwrap());
+                        // set the value
+                        topic = u16::try_from(num).unwrap();
                     }
-                    //add to pairs list
-                    self.topicname_id_pairs
-                        .insert(name.clone().to_string(), u16::try_from(num).unwrap());
-                    // set the value
-                    topic = u16::try_from(num).unwrap()
                 }
             };
 
@@ -188,7 +193,7 @@ pub mod broker {
             // return a SUB_ACK on success
             Message::SubAck(SubAck {
                 flags: Flags::default(),
-                msg_id: self.num_packets,
+                msg_id: packet.msg_id,
                 topic_id: topic,
                 code: ReturnCode::Accepted,
             })
